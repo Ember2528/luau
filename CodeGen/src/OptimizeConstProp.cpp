@@ -630,11 +630,11 @@ struct ConstPropState
         return IrInst{loadInst.cmd, {op}};
     }
 
-    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst)
+    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst, IrOp upvalue)
     {
-        CODEGEN_ASSERT(OP_A(loadInst).kind == IrOpKind::VmUpvalue);
+        CODEGEN_ASSERT(upvalue.kind == IrOpKind::VmUpvalue);
 
-        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(OP_A(loadInst))))
+        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(upvalue)))
         {
             if (*prevIdx != kInvalidInstIdx)
             {
@@ -647,7 +647,7 @@ struct ConstPropState
         uint32_t instIdx = function.getInstIndex(loadInst);
 
         // Record load of this upvalue for future substitution
-        upvalueMap[vmUpvalueOp(OP_A(loadInst))] = instIdx;
+        upvalueMap[vmUpvalueOp(upvalue)] = instIdx;
         return false;
     }
 
@@ -676,6 +676,8 @@ struct ConstPropState
                 argOp = OP_C(store);
             else if (offset == 8)
                 argOp = OP_D(store);
+            else if (offset == 12 && LUA_VECTOR_SIZE == 4)
+                argOp = HAS_OP_F(store) ? OP_F(store) : build.constDouble(0.0);
 
             if (IrInst* arg = function.asInstOp(argOp))
             {
@@ -1745,7 +1747,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         else if (IrInst* source = function.asInstOp(OP_A(inst)))
         {
-            if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
+            if (source->cmd == IrCmd::GET_UPVALUE_ADDR && (!HAS_OP_B(inst) || function.intOp(OP_B(inst)) == 0))
+            {
+                state.substituteOrRecordVmUpvalueLoad(inst, OP_A(*source));
+            }
+            else if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
             {
                 uint32_t* prevIdx = state.hashValueCache.find(OP_A(inst).index);
 
@@ -2044,18 +2050,27 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (tag == LUA_TBOOLEAN &&
                 (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TNUMBER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
+            else if (
+                tag == LUA_TNUMBER &&
+                (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double))
+            )
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TINTEGER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int64)))
+            else if (
+                tag == LUA_TINTEGER &&
+                (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int64))
+            )
                 canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
 
             if (canSplitTvalueStore)
             {
-                if (HAS_OP_C(inst))
+                // A VM-register STORE_TVALUE may carry an explicit zero offset
+                // solely so that its optional tag can occupy operand D.  The
+                // split form has the tag in B and must not retain that dummy
+                // offset: dead-store elimination treats register destinations
+                // as whole-register stores.
+                if (HAS_OP_C(inst) && OP_A(inst).kind != IrOpKind::VmReg)
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value, OP_C(inst)}});
                 else
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value}});
@@ -2240,7 +2255,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     }
     case IrCmd::GET_UPVALUE:
-        state.substituteOrRecordVmUpvalueLoad(inst);
+        state.substituteOrRecordVmUpvalueLoad(inst, OP_A(inst));
+        break;
+    case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
         state.forwardVmUpvalueStoreToLoad(inst);
@@ -2249,6 +2266,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             replace(function, OP_C(inst), build.constTag(tag));
         }
+
+        // Only the GC barrier needs the source value to remain in its VM register.
+        if (HAS_OP_D(inst) && OP_C(inst).kind == IrOpKind::Constant && !isGCO(function.tagOp(OP_C(inst))))
+            replace(function, OP_D(inst), IrOp{});
         break;
     case IrCmd::CHECK_TAG:
     {

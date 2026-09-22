@@ -146,7 +146,7 @@ void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, Regist
     build.and_(byteReg(tmp), byte[table + offsetof(LuaTable, nodemask8)]);
 
     // LuaNode* n = &h->node[slot];
-    build.shl(dwordReg(tmp), kLuaNodeSizeLog2);
+    scaleLuaNodeIndex(build, dwordReg(tmp));
     build.add(node, tmp);
 }
 

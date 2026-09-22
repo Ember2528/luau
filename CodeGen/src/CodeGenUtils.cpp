@@ -274,10 +274,17 @@ Udata* newUserdata(lua_State* L, size_t s, int tag)
     return u;
 }
 
+#if LUA_VECTOR_SIZE == 4
+LuauVector* newVector(lua_State* L, double x, double y, double z, double w)
+{
+    return luaVec_newvector(L, x, y, z, w);
+}
+#else
 LuauVector* newVector(lua_State* L, double x, double y, double z)
 {
     return luaVec_newvector(L, x, y, z, 0.0);
 }
+#endif
 
 void getImport(lua_State* L, StkId res, unsigned id, unsigned pc)
 {

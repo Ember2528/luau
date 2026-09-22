@@ -67,7 +67,7 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
 
         // argend = L->base + p->numparams
         build.movzx(eax, byte[proto + offsetof(Proto, numparams)]);
-        build.shl(eax, kTValueSizeLog2);
+        scaleTValueIndex(build, eax);
         build.lea(argend, addr[rBase + rax]);
 
         // while (argi < argend) setnilvalue(argi++);
@@ -156,10 +156,9 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
         {
             // Opportunistically copy the result we expected from (L->top - results)
             build.mov(vali, qword[rState + offsetof(lua_State, top)]);
-            build.shl(results, kTValueSizeLog2);
+            scaleTValueIndex(build, results);
             build.sub(vali, qwordReg(results));
-            build.vmovups(xmm0, xmmword[vali]);
-            build.vmovups(luauReg(ra), xmm0);
+            copyTValue(build, xmm0, luauReg(ra), xmmword[vali]);
 
             Label skipnil;
 
@@ -203,8 +202,7 @@ void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, i
     {
         // fast path: minimizes res adjustments
         // note that we skipped res computation for this specific case above
-        build.vmovups(xmm0, luauReg(ra));
-        build.vmovups(xmmword[rBase - sizeof(TValue)], xmm0);
+        copyTValue(build, xmm0, xmmword[rBase - sizeof(TValue)], luauReg(ra));
         build.mov(res, rBase);
         build.mov(written, 1);
         build.jmp(helpers.return_);
@@ -213,8 +211,7 @@ void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, i
     {
         for (int r = 0; r < actualResults; ++r)
         {
-            build.vmovups(xmm0, luauReg(ra + r));
-            build.vmovups(xmmword[res + r * sizeof(TValue)], xmm0);
+            copyTValue(build, xmm0, xmmword[res + r * sizeof(TValue)], luauReg(ra + r));
         }
         build.add(res, actualResults * sizeof(TValue));
         build.mov(written, actualResults);
@@ -245,8 +242,7 @@ void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, i
         }
 
         build.setLabel(repeatValueLoop);
-        build.vmovups(xmm0, xmmword[vali]);
-        build.vmovups(xmmword[res], xmm0);
+        copyTValue(build, xmm0, xmmword[res], xmmword[vali]);
         build.add(vali, sizeof(TValue));
         build.add(res, sizeof(TValue));
         build.inc(written);
@@ -283,7 +279,7 @@ void emitInstSetList(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int
         // last = index + count - 1;
         last = edx;
         build.mov(last, dwordReg(cscaled));
-        build.shr(last, kTValueSizeLog2);
+        unscaleTValueBytes(build, last.base);
         build.add(last, index - 1);
     }
 
@@ -326,8 +322,7 @@ void emitInstSetList(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int
         for (int i = 0; i < count; ++i)
         {
             // setobj2t(L, &array[index + i - 1], rb + i);
-            build.vmovups(xmm0, luauRegValue(rb + i));
-            build.vmovups(xmmword[arrayDst + (index + i - 1) * sizeof(TValue)], xmm0);
+            copyTValue(build, xmm0, xmmword[arrayDst + (index + i - 1) * sizeof(TValue)], luauReg(rb + i));
         }
     }
     else
@@ -351,8 +346,12 @@ void emitInstSetList(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int
         build.setLabel(repeatLoop);
 
         // setobj2t(L, &array[index + i - 1], rb + i);
-        build.vmovups(xmm0, xmmword[offset + rBase + rb * sizeof(TValue)]); // luauReg(rb) unwrapped to add offset
-        build.vmovups(xmmword[offset + arrayDst], xmm0);
+        copyTValue(
+            build,
+            xmm0,
+            xmmword[offset + arrayDst],
+            xmmword[offset + rBase + rb * sizeof(TValue)] // luauReg(rb) unwrapped to add offset
+        );
 
         build.add(offset, sizeof(TValue));
         build.cmp(offset, limit);
@@ -382,7 +381,7 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
 
     // &array[index]
     build.mov(dwordReg(elemPtr), dwordReg(index));
-    build.shl(dwordReg(elemPtr), kTValueSizeLog2);
+    scaleTValueIndex(build, dwordReg(elemPtr));
     build.add(elemPtr, qword[table + offsetof(LuaTable, array)]);
 
     // Clear extra variables since we might have more than two

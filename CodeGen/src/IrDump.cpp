@@ -365,6 +365,8 @@ const char* getCmdName(IrCmd cmd)
         return "CONCAT";
     case IrCmd::GET_UPVALUE:
         return "GET_UPVALUE";
+    case IrCmd::GET_UPVALUE_ADDR:
+        return "GET_UPVALUE_ADDR";
     case IrCmd::SET_UPVALUE:
         return "SET_UPVALUE";
     case IrCmd::CHECK_TAG:

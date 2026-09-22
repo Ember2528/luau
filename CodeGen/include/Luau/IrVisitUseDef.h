@@ -82,8 +82,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.defRange(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
         break;
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
+        visitor.maybeUse(OPT_OP_D(inst)); // The wide-value GC barrier reloads the source from its VM register.
         break;
     case IrCmd::INTERRUPT:
         break;

@@ -25,8 +25,6 @@ static const int8_t kInvalidSpill = 64;
 
 static int allocSpill(uint64_t& free, KindA64 kind)
 {
-    CODEGEN_ASSERT(kStackSize <= 256); // to support larger stack frames, we need to ensure qN is allocated at 16b boundary to fit in ldr/str encoding
-
     uint64_t search = free;
 
     // qN registers use two consecutive slots
@@ -34,6 +32,14 @@ static int allocSpill(uint64_t& free, KindA64 kind)
     {
         // Make sure bit N is set only if bit N+1 is also set
         search = free & (free >> 1);
+
+        // Past the unscaled immediate range, SIMD spills need a 16-byte aligned offset.
+        if constexpr (kStackSize > 256)
+        {
+            static_assert(sSpillArea.data % 16 == 0);
+            constexpr uint64_t largeOffsets = ~0ull << ((256 - sSpillArea.data) / 8);
+            search &= ~(largeOffsets & 0xaaaaaaaaaaaaaaaaull);
+        }
 
         // Prevent qN from allocating at stack/extra spill storage boundary (by reserving last stack slot)
         search &= ~(1ull << (kSpillSlots - 1));
@@ -91,6 +97,17 @@ static int getReloadOffset(IrValueKind kind)
 static AddressA64 getReloadAddress(ValueRestoreLocation location)
 {
     IrOp op = location.op;
+
+    if constexpr (sizeof(TValue) > 16)
+    {
+        int offset = op.index * sizeof(TValue) + getReloadOffset(location.kind);
+        int size = location.kind == IrValueKind::Tvalue ? 16 : location.kind == IrValueKind::Tag || location.kind == IrValueKind::Int ? 4 : 8;
+        if (offset > 255 && (offset % size != 0 || unsigned(offset / size) > AddressA64::kMaxOffset))
+            return AddressA64(xzr);
+        // Materializing a lazy scalar also writes a nil tag using a 32-bit store.
+        if (location.lazy && location.kind != IrValueKind::Tvalue && (op.index * sizeof(TValue) + offsetof(TValue, tt)) / 4 > AddressA64::kMaxOffset)
+            return AddressA64(xzr);
+    }
 
     if (op.kind == IrOpKind::VmReg)
         return mem(rBase, vmRegOp(op) * sizeof(TValue) + getReloadOffset(location.kind));
@@ -609,7 +626,7 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx)
     {
         // instead of spilling the register to never reload it, we assume the register is not needed anymore
     }
-    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true))
+    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true) && getReloadAddress(function.findRestoreLocation(def, true)).base != xzr)
     {
         ValueRestoreLocation loc = function.findRestoreLocation(def, true);
 

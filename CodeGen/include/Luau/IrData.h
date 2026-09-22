@@ -51,7 +51,8 @@ enum class IrCmd : uint8_t
     NOP,
 
     // Load a tag from TValue
-    // A: Rn or Kn
+    // A: Rn or Kn or pointer (TValue)
+    // B: int/none (optional 'A' pointer offset)
     LOAD_TAG,
 
     // Load a pointer (*) from TValue
@@ -75,10 +76,10 @@ enum class IrCmd : uint8_t
     // B: int (offset from the start of TValue)
     LOAD_FLOAT,
 
-    // Load a TValue from memory
+    // Load the 128-bit TValue payload from memory; the tag is separate in wider layouts
     // A: Rn or Kn or pointer (TValue)
     // B: int/none (optional 'A' pointer offset)
-    // C: tag/none (tag of the value being loaded)
+    // C: tag/none (known tag metadata, not part of the load)
     LOAD_TVALUE,
 
     // Load current environment table
@@ -143,12 +144,14 @@ enum class IrCmd : uint8_t
     // C: float (y)
     // D: float (z)
     // E: tag (optional)
+    // F: float (w, optional; defaults to zero in four-component builds)
     STORE_VECTOR,
 
     // Store a TValue into memory
     // A: Rn or pointer (TValue)
     // B: TValue
     // C: int (optional 'A' pointer offset)
+    // D: tag (optional; required when the tag isn't embedded in B)
     STORE_TVALUE,
 
     // Store a pair of tag and value into memory
@@ -501,6 +504,7 @@ enum class IrCmd : uint8_t
     // A: double (x)
     // B: double (y)
     // C: double (z)
+    // D: double (w in four-component builds, optional; defaults to zero)
     NEW_VECTOR,
 
     // Convert integer into a double number
@@ -638,10 +642,16 @@ enum class IrCmd : uint8_t
     // A: UPn
     GET_UPVALUE,
 
+    // Resolve a function upvalue to its TValue address (inline or through UpVal.v)
+    // Consume before an operation that can close upvalues or move the stack.
+    // A: UPn
+    GET_UPVALUE_ADDR,
+
     // Store TValue into a function upvalue
     // A: UPn
     // B: TValue
     // C: tag/undef (tag of the value that was written)
+    // D: Rn/undef (source location for a dynamic GC barrier)
     SET_UPVALUE,
 
     // Guards and checks (these instructions are not block terminators even though they jump to fallback)

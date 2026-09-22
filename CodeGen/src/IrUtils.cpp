@@ -331,6 +331,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::None;
     case IrCmd::GET_UPVALUE:
         return IrValueKind::Tvalue;
+    case IrCmd::GET_UPVALUE_ADDR:
+        return IrValueKind::Pointer;
     case IrCmd::SET_UPVALUE:
     case IrCmd::CHECK_TAG:
     case IrCmd::CHECK_TRUTHY:
