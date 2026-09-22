@@ -909,6 +909,8 @@ struct ConstPropState
                     component = OP_B(addrInst);
                 else if (offset == 16)
                     component = OP_C(addrInst);
+                else if (offset == 24 && HAS_OP_D(addrInst))
+                    component = OP_D(addrInst);
 
                 if (component.kind != IrOpKind::None)
                 {

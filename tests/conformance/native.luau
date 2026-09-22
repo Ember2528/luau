@@ -452,7 +452,9 @@ local function vec3neg(a: vector) return -a end
 assert(vec3add(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(11, 20, 42))
 assert(vec3sub(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(9, 20, 38))
 assert(vec3mul(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(10, 0, 80))
-assert(vec3div(vector.create(10, 20, 40), vector.create(1, 0, 2)) == vector.create(10, math.huge, 20))
+-- Keep the fourth lane well-defined in vec4 configurations; 0/0 would be NaN
+-- and can never compare equal to the constructor's default w=0.
+assert(vec3div(vector.create(10, 20, 40, 0), vector.create(1, 0, 2, 1)) == vector.create(10, math.huge, 20, 0))
 assert(vec3neg(vector.create(10, 20, 40)) == vector.create(-10, -20, -40))
 
 local function vec3mulnum(a: vector, b: number) return a * b end

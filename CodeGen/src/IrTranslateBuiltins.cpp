@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrTranslateBuiltins.h"
+#include "IrTranslation.h"
 
 #include "Luau/Bytecode.h"
 #include "Luau/IrBuilder.h"
@@ -319,32 +320,25 @@ static BuiltinImplResult translateBuiltinVectorLerp(IrBuilder& build, int nparam
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-
+        VectorComponents a = loadHeapVector(build, aptr);
         IrOp bptr = build.inst(IrCmd::LOAD_POINTER, args);
-        IrOp bx = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp by = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp bz = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-
+        VectorComponents b = loadHeapVector(build, bptr);
         IrOp t = builtinLoadDouble(build, arg3);
 
-        IrOp dx = build.inst(IrCmd::SUB_NUM, bx, ax);
-        IrOp dy = build.inst(IrCmd::SUB_NUM, by, ay);
-        IrOp dz = build.inst(IrCmd::SUB_NUM, bz, az);
+        VectorComponents diff;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            diff[i] = build.inst(IrCmd::SUB_NUM, b[i], a[i]);
 
-        IrOp lx = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::MUL_NUM, dx, t), ax);
-        IrOp ly = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::MUL_NUM, dy, t), ay);
-        IrOp lz = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::MUL_NUM, dz, t), az);
+        VectorComponents lerp;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            lerp[i] = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::MUL_NUM, diff[i], t), a[i]);
 
         IrOp one = build.constDouble(1.0);
-        IrOp rx = build.inst(IrCmd::SELECT_NUM, lx, bx, t, one);
-        IrOp ry = build.inst(IrCmd::SELECT_NUM, ly, by, t, one);
-        IrOp rz = build.inst(IrCmd::SELECT_NUM, lz, bz, t, one);
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(IrCmd::SELECT_NUM, lerp[i], b[i], t, one);
 
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, rx, ry, rz));
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+        storeVector(build, build.vmReg(ra), result);
     }
     else
     {
@@ -358,7 +352,7 @@ static BuiltinImplResult translateBuiltinVectorLerp(IrBuilder& build, int nparam
 
         IrOp res = build.inst(IrCmd::MULADD_VEC, diff, tvec, a);
         IrOp ret = build.inst(IrCmd::SELECT_VEC, res, b, tvec, one);
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        storeVector(build, build.vmReg(ra), ret);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -819,54 +813,33 @@ static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, i
     if (nparams < 2 || nresults > 1)
         return {BuiltinImplType::None, -1};
 
-    CODEGEN_ASSERT(LUA_VECTOR_SIZE == 3);
-
-    if (nparams == 2)
+    // Ignore arguments beyond the configured width, just like the VM.
+    int count = nparams < LUA_VECTOR_SIZE ? nparams : LUA_VECTOR_SIZE;
+    VectorComponents sources{build.vmReg(arg), args, arg3};
+    if constexpr (LUA_VECTOR_SIZE == 4)
     {
-        builtinCheckDouble(build, build.vmReg(arg), pcpos);
-        builtinCheckDouble(build, args, pcpos);
-
-        IrOp x = builtinLoadDouble(build, build.vmReg(arg));
-        IrOp y = builtinLoadDouble(build, args);
-
-        if constexpr (LUA_VECTOR_DOUBLE == 1)
-        {
-            build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, x, y, build.constDouble(0.0)));
-        }
-        else
-        {
-            IrOp xf = build.inst(IrCmd::NUM_TO_FLOAT, x);
-            IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
-
-            build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, build.constDouble(0.0));
-        }
-    }
-    else
-    {
-        builtinCheckDouble(build, build.vmReg(arg), pcpos);
-        builtinCheckDouble(build, args, pcpos);
-        builtinCheckDouble(build, arg3, pcpos);
-
-        IrOp x = builtinLoadDouble(build, build.vmReg(arg));
-        IrOp y = builtinLoadDouble(build, args);
-        IrOp z = builtinLoadDouble(build, arg3);
-
-        if constexpr (LUA_VECTOR_DOUBLE == 1)
-        {
-            build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, x, y, z));
-        }
-        else
-        {
-
-            IrOp xf = build.inst(IrCmd::NUM_TO_FLOAT, x);
-            IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
-            IrOp zf = build.inst(IrCmd::NUM_TO_FLOAT, z);
-
-            build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, zf);
-        }
+        // FASTCALL only customizes the first three operands; the fourth uses a contiguous argument register.
+        if (count == 4)
+            sources[3] = build.vmReg(arg + 3);
     }
 
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+    for (int i = 0; i < count; ++i)
+        builtinCheckDouble(build, sources[i], pcpos);
+
+    VectorComponents components;
+    for (int i = 0; i < count; ++i)
+        components[i] = builtinLoadDouble(build, sources[i]);
+
+    if constexpr (LUA_VECTOR_DOUBLE == 0)
+    {
+        for (int i = 0; i < count; ++i)
+            components[i] = build.inst(IrCmd::NUM_TO_FLOAT, components[i]);
+    }
+
+    if (count == 2)
+        components[2] = build.constDouble(0.0);
+    // An absent W retains the stores' zero-fill behavior without an extra conversion.
+    storeVector(build, build.vmReg(ra), components);
 
     return {BuiltinImplType::Full, 1};
 }
@@ -895,8 +868,8 @@ static BuiltinImplResult translateBuiltinTableInsert(IrBuilder& build, int npara
     }
     else
     {
-        IrOp va = build.inst(IrCmd::LOAD_TVALUE, args);
-        build.inst(IrCmd::STORE_TVALUE, setnum, va);
+        LoadedTValue va = loadTValueAndTag(build, args);
+        storeTValueAndTag(build, setnum, va);
 
         // Compiler only generates FASTCALL*K for source-level constants, so dynamic imports are not affected
         CODEGEN_ASSERT(build.function.proto);
@@ -1015,6 +988,17 @@ static BuiltinImplResult translateBuiltinBufferWrite(
     return {BuiltinImplType::Full, 0};
 }
 
+// Keep the established three-wide reduction order; four-wide follows the VM's left-to-right sum.
+[[maybe_unused]] static IrOp sumVectorComponents(IrBuilder& build, const VectorComponents& components)
+{
+    if constexpr (LUA_VECTOR_SIZE == 4)
+        return build.inst(
+            IrCmd::ADD_NUM, build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::ADD_NUM, components[0], components[1]), components[2]), components[3]
+        );
+    else
+        return build.inst(IrCmd::ADD_NUM, components[0], build.inst(IrCmd::ADD_NUM, components[1], components[2]));
+}
+
 static BuiltinImplResult translateBuiltinVectorMagnitude(
     IrBuilder& build,
     int nparams,
@@ -1036,14 +1020,12 @@ static BuiltinImplResult translateBuiltinVectorMagnitude(
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
-        IrOp xx = build.inst(IrCmd::MUL_NUM, ax, ax);
-        IrOp yy = build.inst(IrCmd::MUL_NUM, ay, ay);
-        IrOp zz = build.inst(IrCmd::MUL_NUM, az, az);
-        IrOp sum = build.inst(IrCmd::ADD_NUM, xx, build.inst(IrCmd::ADD_NUM, yy, zz));
+        VectorComponents products;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            products[i] = build.inst(IrCmd::MUL_NUM, a[i], a[i]);
+        IrOp sum = sumVectorComponents(build, products);
 
         IrOp mag = build.inst(IrCmd::SQRT_NUM, sum);
 
@@ -1087,24 +1069,21 @@ static BuiltinImplResult translateBuiltinVectorNormalize(
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
-        IrOp xx = build.inst(IrCmd::MUL_NUM, ax, ax);
-        IrOp yy = build.inst(IrCmd::MUL_NUM, ay, ay);
-        IrOp zz = build.inst(IrCmd::MUL_NUM, az, az);
-        IrOp sum = build.inst(IrCmd::ADD_NUM, xx, build.inst(IrCmd::ADD_NUM, yy, zz));
+        VectorComponents products;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            products[i] = build.inst(IrCmd::MUL_NUM, a[i], a[i]);
+        IrOp sum = sumVectorComponents(build, products);
 
         IrOp mag = build.inst(IrCmd::SQRT_NUM, sum);
+
         IrOp inv = build.inst(IrCmd::DIV_NUM, build.constDouble(1.0), mag);
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(IrCmd::MUL_NUM, a[i], inv);
 
-        IrOp rx = build.inst(IrCmd::MUL_NUM, ax, inv);
-        IrOp ry = build.inst(IrCmd::MUL_NUM, ay, inv);
-        IrOp rz = build.inst(IrCmd::MUL_NUM, az, inv);
-
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, rx, ry, rz));
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+        storeVector(build, build.vmReg(ra), result);
     }
     else
     {
@@ -1117,9 +1096,7 @@ static BuiltinImplResult translateBuiltinVectorNormalize(
 
         IrOp result = build.inst(IrCmd::MUL_VEC, a, invvec);
 
-        result = build.inst(IrCmd::TAG_VECTOR, result);
-
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
+        storeVector(build, build.vmReg(ra), result);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1140,14 +1117,14 @@ static BuiltinImplResult translateBuiltinVectorCross(IrBuilder& build, int npara
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
         IrOp bptr = build.inst(IrCmd::LOAD_POINTER, args);
 
-        IrOp x1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp x2 = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(0), build.constTag(LUA_TVECTOR));
+        IrOp x1 = loadHeapVectorComponent(build, aptr, 0);
+        IrOp x2 = loadHeapVectorComponent(build, bptr, 0);
 
-        IrOp y1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp y2 = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(8), build.constTag(LUA_TVECTOR));
+        IrOp y1 = loadHeapVectorComponent(build, aptr, 1);
+        IrOp y2 = loadHeapVectorComponent(build, bptr, 1);
 
-        IrOp z1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-        IrOp z2 = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        IrOp z1 = loadHeapVectorComponent(build, aptr, 2);
+        IrOp z2 = loadHeapVectorComponent(build, bptr, 2);
 
         IrOp y1z2 = build.inst(IrCmd::MUL_NUM, y1, z2);
         IrOp z1y2 = build.inst(IrCmd::MUL_NUM, z1, y2);
@@ -1161,7 +1138,7 @@ static BuiltinImplResult translateBuiltinVectorCross(IrBuilder& build, int npara
         IrOp y1x2 = build.inst(IrCmd::MUL_NUM, y1, x2);
         IrOp zr = build.inst(IrCmd::SUB_NUM, x1y2, y1x2);
 
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, xr, yr, zr));
+        storeVector(build, build.vmReg(ra), VectorComponents{xr, yr, zr});
     }
     else
     {
@@ -1186,10 +1163,8 @@ static BuiltinImplResult translateBuiltinVectorCross(IrBuilder& build, int npara
         IrOp y1x2 = build.inst(IrCmd::MUL_FLOAT, y1, x2);
         IrOp zr = build.inst(IrCmd::SUB_FLOAT, x1y2, y1x2);
 
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+        storeVector(build, build.vmReg(ra), VectorComponents{xr, yr, zr});
     }
-
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1207,20 +1182,15 @@ static BuiltinImplResult translateBuiltinVectorDot(IrBuilder& build, int nparams
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
         IrOp bptr = build.inst(IrCmd::LOAD_POINTER, args);
-        IrOp bx = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp by = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp bz = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents b = loadHeapVector(build, bptr);
 
-        IrOp xx = build.inst(IrCmd::MUL_NUM, ax, bx);
-        IrOp yy = build.inst(IrCmd::MUL_NUM, ay, by);
-        IrOp zz = build.inst(IrCmd::MUL_NUM, az, bz);
-
-        IrOp sum = build.inst(IrCmd::ADD_NUM, xx, build.inst(IrCmd::ADD_NUM, yy, zz));
+        VectorComponents products;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            products[i] = build.inst(IrCmd::MUL_NUM, a[i], b[i]);
+        IrOp sum = sumVectorComponents(build, products);
 
         build.inst(IrCmd::STORE_DOUBLE, build.vmReg(ra), sum);
         build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNUMBER));
@@ -1263,23 +1233,20 @@ static BuiltinImplResult translateBuiltinVectorMap1x4(
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
-        IrOp rx = build.inst(cmd, ax);
-        IrOp ry = build.inst(cmd, ay);
-        IrOp rz = build.inst(cmd, az);
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(cmd, a[i]);
 
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, rx, ry, rz));
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+        storeVector(build, build.vmReg(ra), result);
     }
     else
     {
         IrOp value = build.inst(IrCmd::LOAD_TVALUE, arg1);
         IrOp ret = build.inst(cmd, value);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        storeVector(build, build.vmReg(ra), ret);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1307,30 +1274,26 @@ static BuiltinImplResult translateBuiltinVectorMap1(
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp x1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp y1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp z1 = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
-        IrOp xr = build.inst(cmd, x1);
-        IrOp yr = build.inst(cmd, y1);
-        IrOp zr = build.inst(cmd, z1);
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(cmd, a[i]);
 
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, xr, yr, zr));
+        storeVector(build, build.vmReg(ra), result);
     }
     else
     {
-        IrOp x1 = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(0));
-        IrOp y1 = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(4));
-        IrOp z1 = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(8));
+        VectorComponents a;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            a[i] = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(i * 4));
 
-        IrOp xr = build.inst(cmd, x1);
-        IrOp yr = build.inst(cmd, y1);
-        IrOp zr = build.inst(cmd, z1);
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(cmd, a[i]);
 
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+        storeVector(build, build.vmReg(ra), result);
     }
-
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
 
     return {BuiltinImplType::Full, 1};
 }
@@ -1356,90 +1319,53 @@ static BuiltinImplResult translateBuiltinVectorClamp(
     build.loadAndCheckTag(args, LUA_TVECTOR, build.vmExit(pcpos));
     build.loadAndCheckTag(arg3, LUA_TVECTOR, build.vmExit(pcpos));
 
-    IrOp block1 = build.block(IrBlockKind::Internal);
-    IrOp block2 = build.block(IrBlockKind::Internal);
-    IrOp block3 = build.block(IrBlockKind::Internal);
+    std::array<IrOp, LUA_VECTOR_SIZE> blocks;
+    for (IrOp& block : blocks)
+        block = build.block(IrBlockKind::Internal);
 
+    IrOp sources[] = {arg1, args, arg3};
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
-        IrOp valptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp vminptr = build.inst(IrCmd::LOAD_POINTER, args);
-        IrOp vmaxptr = build.inst(IrCmd::LOAD_POINTER, arg3);
-
-        IrOp x = build.inst(IrCmd::BUFFER_READF64, valptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp xmin = build.inst(IrCmd::BUFFER_READF64, vminptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp xmax = build.inst(IrCmd::BUFFER_READF64, vmaxptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-
-        build.inst(IrCmd::JUMP_CMP_NUM, xmin, xmax, build.cond(IrCondition::NotLessEqual), fallback, block1);
-
-        build.beginBlock(block1);
-
-        IrOp y = build.inst(IrCmd::BUFFER_READF64, valptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp ymin = build.inst(IrCmd::BUFFER_READF64, vminptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp ymax = build.inst(IrCmd::BUFFER_READF64, vmaxptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-
-        build.inst(IrCmd::JUMP_CMP_NUM, ymin, ymax, build.cond(IrCondition::NotLessEqual), fallback, block2);
-
-        build.beginBlock(block2);
-
-        IrOp z = build.inst(IrCmd::BUFFER_READF64, valptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-        IrOp zmin = build.inst(IrCmd::BUFFER_READF64, vminptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-        IrOp zmax = build.inst(IrCmd::BUFFER_READF64, vmaxptr, build.constInt(16), build.constTag(LUA_TVECTOR));
-
-        build.inst(IrCmd::JUMP_CMP_NUM, zmin, zmax, build.cond(IrCondition::NotLessEqual), fallback, block3);
-
-        build.beginBlock(block3);
-
-        IrOp xtemp = build.inst(IrCmd::MAX_NUM, xmin, x);
-        IrOp xclamped = build.inst(IrCmd::MIN_NUM, xmax, xtemp);
-
-        IrOp ytemp = build.inst(IrCmd::MAX_NUM, ymin, y);
-        IrOp yclamped = build.inst(IrCmd::MIN_NUM, ymax, ytemp);
-
-        IrOp ztemp = build.inst(IrCmd::MAX_NUM, zmin, z);
-        IrOp zclamped = build.inst(IrCmd::MIN_NUM, zmax, ztemp);
-
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, xclamped, yclamped, zclamped));
+        for (IrOp& source : sources)
+            source = build.inst(IrCmd::LOAD_POINTER, source);
     }
-    else
+
+    auto loadComponent = [&](IrOp source, int component)
     {
-        IrOp x = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(0));
-        IrOp xmin = build.inst(IrCmd::LOAD_FLOAT, args, build.constInt(0));
-        IrOp xmax = build.inst(IrCmd::LOAD_FLOAT, arg3, build.constInt(0));
+        if constexpr (LUA_VECTOR_DOUBLE == 1)
+            return loadHeapVectorComponent(build, source, component);
+        else
+            return build.inst(IrCmd::LOAD_FLOAT, source, build.constInt(component * 4));
+    };
 
-        build.inst(IrCmd::JUMP_CMP_FLOAT, xmin, xmax, build.cond(IrCondition::NotLessEqual), fallback, block1);
-
-        build.beginBlock(block1);
-
-        IrOp y = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(4));
-        IrOp ymin = build.inst(IrCmd::LOAD_FLOAT, args, build.constInt(4));
-        IrOp ymax = build.inst(IrCmd::LOAD_FLOAT, arg3, build.constInt(4));
-
-        build.inst(IrCmd::JUMP_CMP_FLOAT, ymin, ymax, build.cond(IrCondition::NotLessEqual), fallback, block2);
-
-        build.beginBlock(block2);
-
-        IrOp z = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(8));
-        IrOp zmin = build.inst(IrCmd::LOAD_FLOAT, args, build.constInt(8));
-        IrOp zmax = build.inst(IrCmd::LOAD_FLOAT, arg3, build.constInt(8));
-
-        build.inst(IrCmd::JUMP_CMP_FLOAT, zmin, zmax, build.cond(IrCondition::NotLessEqual), fallback, block3);
-
-        build.beginBlock(block3);
-
-        IrOp xtemp = build.inst(IrCmd::MAX_FLOAT, xmin, x);
-        IrOp xclamped = build.inst(IrCmd::MIN_FLOAT, xmax, xtemp);
-
-        IrOp ytemp = build.inst(IrCmd::MAX_FLOAT, ymin, y);
-        IrOp yclamped = build.inst(IrCmd::MIN_FLOAT, ymax, ytemp);
-
-        IrOp ztemp = build.inst(IrCmd::MAX_FLOAT, zmin, z);
-        IrOp zclamped = build.inst(IrCmd::MIN_FLOAT, zmax, ztemp);
-
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xclamped, yclamped, zclamped);
+    VectorComponents value, min, max;
+    for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+    {
+        value[i] = loadComponent(sources[0], i);
+        min[i] = loadComponent(sources[1], i);
+        max[i] = loadComponent(sources[2], i);
+        build.inst(
+            LUA_VECTOR_DOUBLE ? IrCmd::JUMP_CMP_NUM : IrCmd::JUMP_CMP_FLOAT,
+            min[i],
+            max[i],
+            build.cond(IrCondition::NotLessEqual),
+            fallback,
+            blocks[i]
+        );
+        build.beginBlock(blocks[i]);
     }
 
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+    auto clampComponent = [&](int component)
+    {
+        IrOp temp = build.inst(LUA_VECTOR_DOUBLE ? IrCmd::MAX_NUM : IrCmd::MAX_FLOAT, min[component], value[component]);
+        return build.inst(LUA_VECTOR_DOUBLE ? IrCmd::MIN_NUM : IrCmd::MIN_FLOAT, max[component], temp);
+    };
+
+    VectorComponents result;
+    for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+        result[i] = clampComponent(i);
+
+    storeVector(build, build.vmReg(ra), result);
 
     return {BuiltinImplType::UsesFallback, 1};
 }
@@ -1467,22 +1393,18 @@ static BuiltinImplResult translateBuiltinVectorMinMax(
     if constexpr (LUA_VECTOR_DOUBLE == 1)
     {
         IrOp aptr = build.inst(IrCmd::LOAD_POINTER, arg1);
-        IrOp ax = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp ay = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp az = build.inst(IrCmd::BUFFER_READF64, aptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents a = loadHeapVector(build, aptr);
 
         IrOp bptr = build.inst(IrCmd::LOAD_POINTER, args);
-        IrOp bx = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(0), build.constTag(LUA_TVECTOR));
-        IrOp by = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(8), build.constTag(LUA_TVECTOR));
-        IrOp bz = build.inst(IrCmd::BUFFER_READF64, bptr, build.constInt(16), build.constTag(LUA_TVECTOR));
+        VectorComponents b = loadHeapVector(build, bptr);
 
-        // Swapped arguments are required for consistency with VM builtins
-        IrOp rx = build.inst(cmd, bx, ax);
-        IrOp ry = build.inst(cmd, by, ay);
-        IrOp rz = build.inst(cmd, bz, az);
+        // Swapped arguments are required for consistency with VM builtins.
 
-        build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, rx, ry, rz));
-        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
+        VectorComponents result;
+        for (int i = 0; i < LUA_VECTOR_SIZE; ++i)
+            result[i] = build.inst(cmd, b[i], a[i]);
+
+        storeVector(build, build.vmReg(ra), result);
     }
     else
     {
@@ -1492,7 +1414,7 @@ static BuiltinImplResult translateBuiltinVectorMinMax(
         // Swapped arguments are required for consistency with VM builtins
         IrOp ret = build.inst(cmd, value2, value1);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        storeVector(build, build.vmReg(ra), ret);
     }
 
     return {BuiltinImplType::Full, 1};
