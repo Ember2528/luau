@@ -208,6 +208,23 @@ struct BytecodeCompilerFixture
 
 TEST_SUITE_BEGIN("BytecodeCompiler");
 
+TEST_CASE_FIXTURE(BytecodeCompilerFixture, "unaligned_instruction_stream")
+{
+    auto bytecode = getFunctionBytecode("return 42");
+    REQUIRE(bytecode);
+    size_t offset = 5;
+    uint32_t typeInfoSize = readVarInt(bytecode->data(), offset);
+    offset += typeInfoSize;
+    REQUIRE(readVarInt(bytecode->data(), offset) > 0);
+    REQUIRE(offset % alignof(Instruction) != 0);
+
+    auto fn = fromFunctionBytecode(*bytecode, strings);
+    REQUIRE(fn);
+    BytecodeBuilder reserializer;
+    Bytecode::toFunctionBytecode(reserializer, *fn);
+    CHECK_EQ(extractCode(*bytecode), extractCode(reserializer.getFunctionData(0)));
+}
+
 TEST_CASE_FIXTURE(BytecodeCompilerFixture, "from_function_bytecode")
 {
     ScopedFastFlag luauEmitCallFeedback{FFlag::LuauEmitCallFeedback, true};
