@@ -21,8 +21,9 @@
 
 #include "doctest.h"
 #include "ScopedFlags.h"
-#include "BufferCage.h"
 #include "ConformanceIrHooks.h"
+// BufferCage includes Windows headers that define FASTCALL; keep it after the IR hooks.
+#include "BufferCage.h"
 
 #include <cstdlib>
 #include <fstream>
