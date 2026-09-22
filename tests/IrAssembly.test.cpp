@@ -9,6 +9,12 @@
 
 #include <regex>
 
+#if LUA_VECTOR_SIZE == 4
+static constexpr bool kVectorSize4 = true;
+#else
+static constexpr bool kVectorSize4 = false;
+#endif
+
 LUAU_FASTFLAG(LuauCodegenDseRestoreHintUpdate)
 
 using namespace Luau::CodeGen;
@@ -136,7 +142,35 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmReg")
     // %1 after INTERRUPT spill is restored from R1 using vcvttsd2si conversion
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R0, %1
+ vcvttsd2si  eax,qword ptr [r14+018h]
+ mov         dword ptr [r14],eax
+  STORE_TAG R0, tboolean
+ mov         dword ptr [r14+010h],1
+  RETURN R0, 1i
+ vmovups     xmm0,xmmword ptr [r14]
+ vmovups     xmmword ptr [r14-018h],xmm0
+ vmovss      xmm0,dword ptr [r14+010h]
+ vmovss      dword ptr [r14-08h],xmm0
+ mov         rdi,r14
+ mov         ecx,1
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -183,7 +217,45 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmRegBoth")
     // Both %0 and %1 restore from R2, integer restore uses vcvttsd2si
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R2
+ vmovsd      xmm0,qword ptr [r14+030h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R0, %1
+ vcvttsd2si  eax,qword ptr [r14+030h]
+ mov         dword ptr [r14],eax
+  STORE_TAG R0, tboolean
+ mov         dword ptr [r14+010h],1
+  STORE_DOUBLE R1, %0
+ vmovsd      xmm0,qword ptr [r14+030h]
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  RETURN R0, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14]
+ vmovups     xmmword ptr [rdi],xmm0
+ vmovss      xmm0,dword ptr [r14+010h]
+ vmovss      dword ptr [rdi+010h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ vmovss      xmm0,dword ptr [r14+028h]
+ vmovss      dword ptr [rdi+028h],xmm0
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -237,7 +309,32 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntWithoutChainSpillsToStack")
     // %3 is restored from a stack spill as there is no VM register store location for it
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %2 = ADD_NUM %0, R2
+ vaddsd      xmm0,xmm0,qword ptr [r14+030h]
+  %3 = NUM_TO_INT %2
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         dword ptr [rsp+048h],eax
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R3, %3
+ mov         eax,dword ptr [rsp+048h]
+ mov         dword ptr [r14+048h],eax
+  RETURN R0, 0i
+ lea         rdi,[r14-018h]
+ xor         ecx,ecx
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -294,7 +391,50 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintMaterializesIntIntoDeadVmReg")
     // INTERRUPT spills %5 to R4 and later we read from it
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %2
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  %5 = INT_TO_NUM %1
+ vcvtsi2sd   xmm0,xmm0,eax
+  INTERRUPT 0u
+ vmovsd      qword ptr [r14+060h],xmm0
+ mov         dword ptr [r14+070h],0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_DOUBLE R2, %5
+ vmovsd      xmm0,qword ptr [r14+060h]
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  RETURN R1, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ vmovss      xmm0,dword ptr [r14+028h]
+ vmovss      dword ptr [rdi+010h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ vmovss      xmm0,dword ptr [r14+040h]
+ vmovss      dword ptr [rdi+028h],xmm0
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -368,7 +508,59 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintCorruptsTagOnPartialValueKill")
     // With no established tag+value store after redundant tag store removal, there should be no DSE hint used for R1 spill
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  CHECK_TAG R1, tnumber, exit(0)
+ cmp         dword ptr [r14+028h],3
+ jne         .L12
+  CHECK_TAG R2, tnumber, exit(0)
+ cmp         dword ptr [r14+040h],3
+ jne         .L12
+  %4 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %6 = ADD_NUM %4, R2
+ vaddsd      xmm0,xmm0,qword ptr [r14+030h]
+  INTERRUPT 0u
+ vmovsd      qword ptr [rsp+048h],xmm0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L13
+.L14:
+  STORE_DOUBLE R3, %6
+ vmovsd      xmm0,qword ptr [rsp+048h]
+ vmovsd      qword ptr [r14+048h],xmm0
+  STORE_TAG R3, tnumber
+ mov         dword ptr [r14+058h],3
+  CHECK_TAG R4, tnumber, bb_exit_1
+   ; exit sync: R1, {%6}
+ cmp         dword ptr [r14+070h],3
+ jne         .L15
+  %14 = LOAD_DOUBLE R4
+ vmovsd      xmm0,qword ptr [r14+060h]
+  STORE_DOUBLE R1, %14
+ vmovsd      qword ptr [r14+018h],xmm0
+  RETURN R1, 3i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ vmovss      xmm0,dword ptr [r14+028h]
+ vmovss      dword ptr [rdi+010h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ vmovss      xmm0,dword ptr [r14+040h]
+ vmovss      dword ptr [rdi+028h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+048h]
+ vmovups     xmmword ptr [rdi+030h],xmm0
+ vmovss      xmm0,dword ptr [r14+058h]
+ vmovss      dword ptr [rdi+040h],xmm0
+ add         rdi,48h
+ mov         ecx,3
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -445,7 +637,64 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "MultiNumToXSharedSourceStrandsRestore")
     // Both %1 and %2 restore from stack since R1 restore location was killed
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = NUM_TO_UINT %0
+ vcvttsd2si  rdx,xmm0
+  %3 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %3
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  INTERRUPT 0u
+ mov         dword ptr [rsp+048h],eax
+ mov         dword ptr [rsp+04Ch],edx
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  %7 = INT_TO_NUM %1
+ mov         eax,dword ptr [rsp+048h]
+ vcvtsi2sd   xmm0,xmm0,eax
+  STORE_DOUBLE R2, %7
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  %10 = UINT_TO_NUM %2
+ mov         edx,dword ptr [rsp+04Ch]
+ mov         eax,edx
+ vcvtsi2sd   xmm0,xmm0,rax
+  STORE_DOUBLE R3, %10
+ vmovsd      qword ptr [r14+048h],xmm0
+  STORE_TAG R3, tnumber
+ mov         dword ptr [r14+058h],3
+  RETURN R1, 3i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ vmovss      xmm0,dword ptr [r14+028h]
+ vmovss      dword ptr [rdi+010h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ vmovss      xmm0,dword ptr [r14+040h]
+ vmovss      dword ptr [rdi+028h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+048h]
+ vmovups     xmmword ptr [rdi+030h],xmm0
+ vmovss      xmm0,dword ptr [r14+058h]
+ vmovss      dword ptr [rdi+040h],xmm0
+ add         rdi,48h
+ mov         ecx,3
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -533,7 +782,50 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintUpdateRedirectsLazyRestoreToLaterRe
     // INTERRUPT spills to R5 at [r14+050h]
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kVectorSize4 ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %2
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  %5 = INT_TO_NUM %1
+ vcvtsi2sd   xmm0,xmm0,eax
+  INTERRUPT 0u
+ vmovsd      qword ptr [r14+078h],xmm0
+ mov         dword ptr [r14+088h],0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_DOUBLE R2, %5
+ vmovsd      xmm0,qword ptr [r14+078h]
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  RETURN R1, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ vmovss      xmm0,dword ptr [r14+028h]
+ vmovss      dword ptr [rdi+010h],xmm0
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ vmovss      xmm0,dword ptr [r14+040h]
+ vmovss      dword ptr [rdi+028h],xmm0
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:

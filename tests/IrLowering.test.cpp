@@ -307,7 +307,7 @@ local function vecrcp(a: vector)
     return 1 / a
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vecrcp($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -319,8 +319,8 @@ bb_bytecode_1:
   %8 = LOAD_TVALUE R0, 0i, tvector
   %9 = DIV_VEC %7, %8
   %10 = TAG_VECTOR %9
-  STORE_TVALUE R1, %10
-  INTERRUPT 1u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %10, 0i, tvector\n" : "  STORE_TVALUE R1, %10\n") +
+            R"(  INTERRUPT 1u
   RETURN R1, 1i
 )"
     );
@@ -369,7 +369,7 @@ local function vec3add(a: vector, b: vector)
     return a + b
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3add($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -382,8 +382,8 @@ bb_bytecode_1:
   %11 = LOAD_TVALUE R1, 0i, tvector
   %12 = ADD_VEC %10, %11
   %13 = TAG_VECTOR %12
-  STORE_TVALUE R2, %13
-  INTERRUPT 1u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R2, %13, 0i, tvector\n" : "  STORE_TVALUE R2, %13\n") +
+            R"(  INTERRUPT 1u
   RETURN R2, 1i
 )"
     );
@@ -399,7 +399,7 @@ local function vec3minus(a: vector)
     return -a
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3minus($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -410,8 +410,8 @@ bb_bytecode_1:
   %6 = LOAD_TVALUE R0, 0i, tvector
   %7 = UNM_VEC %6
   %8 = TAG_VECTOR %7
-  STORE_TVALUE R1, %8
-  INTERRUPT 1u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %8, 0i, tvector\n" : "  STORE_TVALUE R1, %8\n") +
+            R"(  INTERRUPT 1u
   RETURN R1, 1i
 )"
     );
@@ -427,7 +427,7 @@ local function vec3combo(a: vector, b: vector, c: vector, d: vector)
     return a * b - c / d
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3combo($arg0, $arg1, $arg2, $arg3) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -446,8 +446,8 @@ bb_bytecode_1:
   %25 = DIV_VEC %23, %24
   %34 = SUB_VEC %16, %25
   %35 = TAG_VECTOR %34
-  STORE_TVALUE R4, %35
-  INTERRUPT 3u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R4, %35, 0i, tvector\n" : "  STORE_TVALUE R4, %35\n") +
+            R"(  INTERRUPT 3u
   RETURN R4, 1i
 )"
     );
@@ -464,7 +464,7 @@ local function vec3combo(a: vector)
     return (tmp - tmp) / (tmp + tmp)
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3combo($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -478,8 +478,8 @@ bb_bytecode_1:
   %28 = ADD_VEC %10, %10
   %37 = DIV_VEC %19, %28
   %38 = TAG_VECTOR %37
-  STORE_TVALUE R2, %38
-  INTERRUPT 4u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R2, %38, 0i, tvector\n" : "  STORE_TVALUE R2, %38\n") +
+            R"(  INTERRUPT 4u
   RETURN R2, 1i
 )"
     );
@@ -495,7 +495,7 @@ local function vec3combo(a: vector, b: vector, c: vector, d: vector)
     return a * 2 + b / 4 + 0.5 * c + 40 / d
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3combo($arg0, $arg1, $arg2, $arg3) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -522,8 +522,8 @@ bb_bytecode_1:
   %57 = DIV_VEC %55, %56
   %66 = ADD_VEC %49, %57
   %67 = TAG_VECTOR %66
-  STORE_TVALUE R4, %67
-  INTERRUPT 7u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R4, %67, 0i, tvector\n" : "  STORE_TVALUE R4, %67\n") +
+            R"(  INTERRUPT 7u
   RETURN R4, 1i
 )"
     );
@@ -539,7 +539,7 @@ local function vec3lerp(a: vector, b: vector, t: number)
     return vector.lerp(a, b, t)
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3lerp($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -560,8 +560,8 @@ bb_bytecode_1:
   %22 = MULADD_VEC %21, %19, %15
   %23 = SELECT_VEC %22, %16, %19, %20
   %24 = TAG_VECTOR %23
-  STORE_TVALUE R3, %24
-  INTERRUPT 8u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R3, %24, 0i, tvector\n" : "  STORE_TVALUE R3, %24\n") +
+            R"(  INTERRUPT 8u
   RETURN R3, 1i
 )"
     );
@@ -577,7 +577,7 @@ local function vecops(a: vector, b: vector)
     return vector.min(a, b), vector.max(a, b)
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vecops($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -591,11 +591,11 @@ bb_bytecode_1:
   %12 = LOAD_TVALUE R1, 0i, tvector
   %13 = MIN_VEC %12, %11
   %14 = TAG_VECTOR %13
-  STORE_TVALUE R2, %14
-  %24 = MAX_VEC %12, %11
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R2, %14, 0i, tvector\n" : "  STORE_TVALUE R2, %14\n") +
+            R"(  %24 = MAX_VEC %12, %11
   %25 = TAG_VECTOR %24
-  STORE_TVALUE R3, %25
-  INTERRUPT 14u
+)" + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R3, %25, 0i, tvector\n" : "  STORE_TVALUE R3, %25\n") +
+            R"(  INTERRUPT 14u
   RETURN R2, 2i
 )"
     );
@@ -610,7 +610,29 @@ local function vecops(a: vector)
     return vector.abs(a), vector.floor(a), vector.ceil(a)
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function vecops($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %7 = LOAD_TVALUE R0, 0i, tvector
+  %8 = ABS_VEC %7
+  %9 = TAG_VECTOR %8
+  STORE_TVALUE R1, %9, 0i, tvector
+  %16 = FLOOR_VEC %7
+  %17 = TAG_VECTOR %16
+  STORE_TVALUE R2, %17, 0i, tvector
+  %24 = CEIL_VEC %7
+  %25 = TAG_VECTOR %24
+  STORE_TVALUE R3, %25, 0i, tvector
+  INTERRUPT 15u
+  RETURN R1, 3i
+)T24"
+                             : R"(
 ; function vecops($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1197,7 +1219,7 @@ local function vecrcp(a: vector)
     return vector(1, 2, 3) + a
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vecrcp($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1209,8 +1231,8 @@ bb_bytecode_1:
   %11 = LOAD_TVALUE R0, 0i, tvector
   %12 = ADD_VEC %4, %11
   %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
-  INTERRUPT 2u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %13, 0i, tvector\n" : "  STORE_TVALUE R1, %13\n") +
+            R"(  INTERRUPT 2u
   RETURN R1, 1i
 )"
     );
@@ -1296,7 +1318,7 @@ local function vec3magn(a: vector)
     return a.Magnitude * 3
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vec3magn($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1307,7 +1329,21 @@ bb_bytecode_1:
   %6 = LOAD_FLOAT R0, 0i
   %7 = LOAD_FLOAT R0, 4i
   %8 = LOAD_FLOAT R0, 8i
-  %9 = MUL_FLOAT %6, %6
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %9 = LOAD_FLOAT R0, 12i
+  %10 = MUL_FLOAT %6, %6
+  %11 = MUL_FLOAT %7, %7
+  %12 = MUL_FLOAT %8, %8
+  %13 = ADD_FLOAT %10, %11
+  %14 = ADD_FLOAT %13, %12
+  %15 = MUL_FLOAT %9, %9
+  %16 = ADD_FLOAT %14, %15
+  %17 = SQRT_FLOAT %16
+  %18 = FLOAT_TO_NUM %17
+  %24 = MUL_NUM %18, 3
+  STORE_DOUBLE R1, %24
+)"
+                                  : R"(  %9 = MUL_FLOAT %6, %6
   %10 = MUL_FLOAT %7, %7
   %11 = MUL_FLOAT %8, %8
   %12 = ADD_FLOAT %9, %10
@@ -1316,7 +1352,8 @@ bb_bytecode_1:
   %15 = FLOAT_TO_NUM %14
   %21 = MUL_NUM %15, 3
   STORE_DOUBLE R1, %21
-  STORE_TAG R1, tnumber
+)") +
+            R"(  STORE_TAG R1, tnumber
   INTERRUPT 3u
   RETURN R1, 1i
 )"
@@ -1336,7 +1373,34 @@ local function vec3dot(a: vector, b: vector)
     return (a:Dot(b))
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function vec3dot($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %7 = LOAD_TVALUE R1, 0i, tvector
+  %13 = LOAD_FLOAT R0, 0i
+  %14 = EXTRACT_VEC %7, 0i
+  %15 = MUL_FLOAT %13, %14
+  %16 = LOAD_FLOAT R0, 4i
+  %17 = EXTRACT_VEC %7, 1i
+  %18 = MUL_FLOAT %16, %17
+  %19 = LOAD_FLOAT R0, 8i
+  %20 = EXTRACT_VEC %7, 2i
+  %21 = MUL_FLOAT %19, %20
+  %22 = ADD_FLOAT %15, %18
+  %23 = ADD_FLOAT %22, %21
+  %24 = FLOAT_TO_NUM %23
+  STORE_DOUBLE R2, %24
+  STORE_TAG R2, tnumber
+  INTERRUPT 5u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function vec3dot($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1413,7 +1477,7 @@ local function foo(a: vector, b: vector)
     return a.Unit * b.Magnitude
 end
 )"),
-        R"(
+        std::string(R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1425,7 +1489,42 @@ bb_bytecode_1:
   %8 = LOAD_FLOAT R0, 0i
   %9 = LOAD_FLOAT R0, 4i
   %10 = LOAD_FLOAT R0, 8i
-  %11 = MUL_FLOAT %8, %8
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %11 = LOAD_FLOAT R0, 12i
+  %12 = MUL_FLOAT %8, %8
+  %13 = MUL_FLOAT %9, %9
+  %14 = MUL_FLOAT %10, %10
+  %15 = ADD_FLOAT %12, %13
+  %16 = ADD_FLOAT %15, %14
+  %17 = MUL_FLOAT %11, %11
+  %18 = ADD_FLOAT %16, %17
+  %19 = SQRT_FLOAT %18
+  %20 = DIV_FLOAT 1, %19
+  %21 = MUL_FLOAT %8, %20
+  %22 = MUL_FLOAT %9, %20
+  %23 = MUL_FLOAT %10, %20
+  %24 = MUL_FLOAT %11, %20
+  STORE_VECTOR R3, %21, %22, %23, %24
+  STORE_TAG R3, tvector
+  %29 = LOAD_FLOAT R1, 0i
+  %30 = LOAD_FLOAT R1, 4i
+  %31 = LOAD_FLOAT R1, 8i
+  %32 = LOAD_FLOAT R1, 12i
+  %33 = MUL_FLOAT %29, %29
+  %34 = MUL_FLOAT %30, %30
+  %35 = MUL_FLOAT %31, %31
+  %36 = ADD_FLOAT %33, %34
+  %37 = ADD_FLOAT %36, %35
+  %38 = MUL_FLOAT %32, %32
+  %39 = ADD_FLOAT %37, %38
+  %40 = SQRT_FLOAT %39
+  %48 = LOAD_TVALUE R3, 0i, tvector
+  %51 = FLOAT_TO_VEC %40
+  %52 = MUL_VEC %48, %51
+  %53 = TAG_VECTOR %52
+  STORE_TVALUE R2, %53, 0i, tvector
+)"
+                                  : R"(  %11 = MUL_FLOAT %8, %8
   %12 = MUL_FLOAT %9, %9
   %13 = MUL_FLOAT %10, %10
   %14 = ADD_FLOAT %11, %12
@@ -1451,7 +1550,8 @@ bb_bytecode_1:
   %45 = MUL_VEC %41, %44
   %46 = TAG_VECTOR %45
   STORE_TVALUE R2, %46
-  INTERRUPT 5u
+)") +
+            R"(  INTERRUPT 5u
   RETURN R2, 1i
 )"
     );
@@ -1470,7 +1570,54 @@ local function foo(n: vector, b: vector, t: vector)
     return n:Cross(t):Dot(b) + 1
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tvector, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  CHECK_TAG R2, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %9 = LOAD_TVALUE R2, 0i, tvector
+  %15 = LOAD_FLOAT R0, 0i
+  %16 = EXTRACT_VEC %9, 0i
+  %17 = LOAD_FLOAT R0, 4i
+  %18 = EXTRACT_VEC %9, 1i
+  %19 = LOAD_FLOAT R0, 8i
+  %20 = EXTRACT_VEC %9, 2i
+  %21 = MUL_FLOAT %17, %20
+  %22 = MUL_FLOAT %19, %18
+  %23 = SUB_FLOAT %21, %22
+  %24 = MUL_FLOAT %19, %16
+  %25 = MUL_FLOAT %15, %20
+  %26 = SUB_FLOAT %24, %25
+  %27 = MUL_FLOAT %15, %18
+  %28 = MUL_FLOAT %17, %16
+  %29 = SUB_FLOAT %27, %28
+  STORE_VECTOR R4, %23, %26, %29
+  STORE_TAG R4, tvector
+  %33 = LOAD_TVALUE R1, 0i, tvector
+  %39 = LOAD_FLOAT R4, 0i
+  %40 = EXTRACT_VEC %33, 0i
+  %41 = MUL_FLOAT %39, %40
+  %42 = LOAD_FLOAT R4, 4i
+  %43 = EXTRACT_VEC %33, 1i
+  %44 = MUL_FLOAT %42, %43
+  %45 = LOAD_FLOAT R4, 8i
+  %46 = EXTRACT_VEC %33, 2i
+  %47 = MUL_FLOAT %45, %46
+  %48 = ADD_FLOAT %41, %44
+  %49 = ADD_FLOAT %48, %47
+  %50 = FLOAT_TO_NUM %49
+  %56 = ADD_NUM %50, 1
+  STORE_DOUBLE R3, %56
+  STORE_TAG R3, tnumber
+  INTERRUPT 11u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1536,7 +1683,70 @@ local function foo(v: Vertex, t: vector)
     return v.n:Cross(t):Dot(v.b) + 1
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 4
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tvector, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %8 = LOAD_POINTER R0
+  %9 = GET_SLOT_NODE_ADDR %8, 0u, K1 ('n')
+  CHECK_SLOT_MATCH %9, K1 ('n'), bb_fallback_3
+  %11 = LOAD_TAG %9, 0i
+  %12 = LOAD_TVALUE %9, 0i
+  STORE_TVALUE R3, %12, 0i, %11
+  JUMP bb_4
+bb_4:
+  %18 = LOAD_TVALUE R1, 0i, tvector
+  CHECK_TAG R3, tvector, bb_exit_7
+   ; exit sync: R5, {%18}
+  %24 = LOAD_FLOAT R3, 0i
+  %25 = EXTRACT_VEC %18, 0i
+  %26 = LOAD_FLOAT R3, 4i
+  %27 = EXTRACT_VEC %18, 1i
+  %28 = LOAD_FLOAT R3, 8i
+  %29 = EXTRACT_VEC %18, 2i
+  %30 = MUL_FLOAT %26, %29
+  %31 = MUL_FLOAT %28, %27
+  %32 = SUB_FLOAT %30, %31
+  %33 = MUL_FLOAT %28, %25
+  %34 = MUL_FLOAT %24, %29
+  %35 = SUB_FLOAT %33, %34
+  %36 = MUL_FLOAT %24, %27
+  %37 = MUL_FLOAT %26, %25
+  %38 = SUB_FLOAT %36, %37
+  STORE_VECTOR R3, %32, %35, %38
+  %43 = LOAD_POINTER R0
+  %44 = GET_SLOT_NODE_ADDR %43, 7u, K3 ('b')
+  CHECK_SLOT_MATCH %44, K3 ('b'), bb_fallback_5
+  %46 = LOAD_TAG %44, 0i
+  %47 = LOAD_TVALUE %44, 0i
+  STORE_TVALUE R5, %47, 0i, %46
+  JUMP bb_6
+bb_6:
+  CHECK_TAG R5, tvector, exit(9)
+  %56 = LOAD_FLOAT R3, 0i
+  %57 = LOAD_FLOAT R5, 0i
+  %58 = MUL_FLOAT %56, %57
+  %59 = LOAD_FLOAT R3, 4i
+  %60 = LOAD_FLOAT R5, 4i
+  %61 = MUL_FLOAT %59, %60
+  %62 = LOAD_FLOAT R3, 8i
+  %63 = LOAD_FLOAT R5, 8i
+  %64 = MUL_FLOAT %62, %63
+  %65 = ADD_FLOAT %58, %61
+  %66 = ADD_FLOAT %65, %64
+  %67 = FLOAT_TO_NUM %66
+  %73 = ADD_NUM %67, 1
+  STORE_DOUBLE R2, %73
+  STORE_TAG R2, tnumber
+  INTERRUPT 14u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 4
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -1644,7 +1854,7 @@ local function foo(a: vector, b: vector)
     return vector.normalize(a) * (vector.magnitude(b) + vector.dot(a, b))
 end
 )"),
-        R"(
+        std::string(R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1671,8 +1881,8 @@ bb_bytecode_1:
   %56 = FLOAT_TO_VEC %55
   %57 = MUL_VEC %14, %56
   %58 = TAG_VECTOR %57
-  STORE_TVALUE R2, %58
-  INTERRUPT 19u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R2, %58, 0i, tvector\n" : "  STORE_TVALUE R2, %58\n") +
+            R"(  INTERRUPT 19u
   RETURN R2, 1i
 )"
     );
@@ -1735,7 +1945,42 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_TAG R1, tnumber, bb_fallback_3
+  %6 = LOAD_DOUBLE R1
+  %7 = DIV_NUM %6, 100
+  STORE_DOUBLE R2, %7
+  STORE_TAG R2, tnumber
+  JUMP bb_linear_11
+bb_linear_11:
+  %61 = LOAD_POINTER R0
+  %63 = TRY_NUM_TO_INDEX %6, bb_fallback_5
+  %64 = SUB_INT %63, 1i
+  CHECK_ARRAY_SIZE %61, %64, bb_fallback_5
+  CHECK_NO_METATABLE %61, bb_fallback_5
+  %67 = GET_ARR_ADDR %61, %64
+  %68 = LOAD_TAG %67, 0i
+  %69 = LOAD_TVALUE %67, 0i
+  STORE_TVALUE R4, %69, 0i, %68
+  %75 = SUB_NUM 1, %7
+  CHECK_TAG R4, tvector, bb_exit_12
+   ; exit sync: R5, {%75}
+  %85 = NUM_TO_FLOAT %75
+  %86 = FLOAT_TO_VEC %85
+  %87 = MUL_VEC %69, %86
+  %88 = TAG_VECTOR %87
+  STORE_TVALUE R3, %88, 0i, tvector
+  INTERRUPT 4u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -1786,7 +2031,7 @@ local function foo(vectors: {vector}, i: string, t: {})
 end
 )"
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -1808,8 +2053,8 @@ bb_4:
   %27 = FLOAT_TO_VEC %26
   %28 = MUL_VEC %24, %27
   %29 = TAG_VECTOR %28
-  STORE_TVALUE R3, %29
-  JUMP bb_6
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R3, %29, 0i, tvector\n" : "  STORE_TVALUE R3, %29\n") +
+            R"(  JUMP bb_6
 bb_6:
   INTERRUPT 3u
   RETURN R3, 1i
@@ -1835,7 +2080,7 @@ local function vecrcp(a: vector)
     return vector(1, 2, 3) + a
 end
 )"),
-        R"(
+        std::string(R"(
 ; function vecrcp($arg0) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -1847,8 +2092,8 @@ bb_bytecode_1:
   %11 = LOAD_TVALUE R0, 0i, tvector
   %12 = ADD_VEC %4, %11
   %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
-  INTERRUPT 2u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %13, 0i, tvector\n" : "  STORE_TVALUE R1, %13\n") +
+            R"(  INTERRUPT 2u
   RETURN R1, 1i
 )"
     );
@@ -2015,7 +2260,7 @@ function eq(a: number?, b: number)
 end
 )"
                ),
-        R"(
+        std::string(R"(
 ; function eq($arg0, $arg1) line 2
 bb_0:
   %0 = LOAD_TAG R0
@@ -2039,9 +2284,14 @@ bb_6:
   INTERRUPT 3u
   RETURN R2, 1i
 bb_bytecode_2:
-  %21 = LOAD_TVALUE R1, 0i, tnumber
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %22 = LOAD_TVALUE R1, 0i, tnumber
+  STORE_TVALUE R2, %22, 0i, tnumber
+)"
+                                  : R"(  %21 = LOAD_TVALUE R1, 0i, tnumber
   STORE_TVALUE R2, %21
-  INTERRUPT 5u
+)") +
+            R"(  INTERRUPT 5u
   RETURN R2, 1i
 )"
     );
@@ -2057,7 +2307,7 @@ function eq(a: number, b: number?)
 end
 )"
                ),
-        R"(
+        std::string(R"(
 ; function eq($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -2079,9 +2329,14 @@ bb_5:
   INTERRUPT 3u
   RETURN R2, 1i
 bb_bytecode_2:
-  %20 = LOAD_TVALUE R0, 0i, tnumber
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %21 = LOAD_TVALUE R0, 0i, tnumber
+  STORE_TVALUE R2, %21, 0i, tnumber
+)"
+                                  : R"(  %20 = LOAD_TVALUE R0, 0i, tnumber
   STORE_TVALUE R2, %20
-  INTERRUPT 5u
+)") +
+            R"(  INTERRUPT 5u
   RETURN R2, 1i
 )"
     );
@@ -2160,7 +2415,38 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function getsum($arg0) line 4
+; U0: vector
+; R0: vector from 0 to 14
+bb_bytecode_0:
+  CHECK_TAG R0, tvector, exit(0)
+  %2 = LOAD_FLOAT R0, 0i
+  %3 = FLOAT_TO_NUM %2
+  %8 = LOAD_FLOAT R0, 4i
+  %9 = FLOAT_TO_NUM %8
+  %18 = ADD_NUM %3, %9
+  %21 = GET_UPVALUE_ADDR U0
+  %22 = LOAD_TAG %21, 0i
+  %23 = LOAD_TVALUE %21, 0i
+  STORE_TVALUE R4, %23, 0i, %22
+  CHECK_TAG R4, tvector, bb_exit_1
+   ; exit sync: R5, R3, {%9, %18}
+  %27 = EXTRACT_VEC %23, 0i
+  %28 = FLOAT_TO_NUM %27
+  %37 = ADD_NUM %18, %28
+  %40 = GET_UPVALUE_ADDR U0
+  %41 = LOAD_TAG %40, 0i
+  STORE_TVALUE R3, %23, 0i, %41
+  %46 = EXTRACT_VEC %23, 1i
+  %47 = FLOAT_TO_NUM %46
+  %56 = ADD_NUM %37, %47
+  STORE_DOUBLE R1, %56
+  STORE_TAG R1, tnumber
+  INTERRUPT 13u
+  RETURN R1, 1i
+)T24"
+                             : R"(
 ; function getsum($arg0) line 4
 ; U0: vector
 ; R0: vector from 0 to 14
@@ -2206,7 +2492,54 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, ttable, exit(entry)
+  CHECK_TAG R2, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %12 = LOAD_POINTER R1
+  %13 = LOAD_DOUBLE R0
+  %14 = TRY_NUM_TO_INDEX %13, bb_fallback_3
+  %15 = SUB_INT %14, 1i
+  CHECK_ARRAY_SIZE %12, %15, bb_fallback_3
+  CHECK_NO_METATABLE %12, bb_fallback_3
+  %18 = GET_ARR_ADDR %12, %15
+  %19 = LOAD_TAG %18, 0i
+  %20 = LOAD_TVALUE %18, 0i
+  STORE_TVALUE R5, %20, 0i, %19
+  JUMP bb_linear_17
+bb_linear_17:
+  %128 = LOAD_TAG %18, 0i
+  STORE_TVALUE R6, %20, 0i, %128
+  CHECK_TAG R5, tnumber, bb_fallback_7
+  %136 = LOAD_DOUBLE R5
+  %138 = MUL_NUM %136, %136
+  STORE_DOUBLE R4, %138
+  STORE_TAG R4, tnumber
+  %142 = LOAD_POINTER R2
+  CHECK_ARRAY_SIZE %142, %15, bb_fallback_9
+  CHECK_NO_METATABLE %142, bb_fallback_9
+  %148 = GET_ARR_ADDR %142, %15
+  %149 = LOAD_TAG %148, 0i
+  %150 = LOAD_TVALUE %148, 0i
+  STORE_TVALUE R6, %150, 0i, %149
+  %160 = LOAD_TAG %148, 0i
+  STORE_TVALUE R7, %150, 0i, %160
+  CHECK_TAG R6, tnumber, bb_fallback_13
+  %168 = LOAD_DOUBLE R6
+  %170 = MUL_NUM %168, %168
+  %180 = ADD_NUM %138, %170
+  STORE_DOUBLE R3, %180
+  STORE_TAG R3, tnumber
+  INTERRUPT 7u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -2268,7 +2601,74 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R1, tnumber, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %10 = LOAD_POINTER R0
+  %11 = LOAD_DOUBLE R1
+  %12 = TRY_NUM_TO_INDEX %11, bb_fallback_3
+  %13 = SUB_INT %12, 1i
+  CHECK_ARRAY_SIZE %10, %13, bb_fallback_3
+  CHECK_NO_METATABLE %10, bb_fallback_3
+  %16 = GET_ARR_ADDR %10, %13
+  %17 = LOAD_TAG %16, 0i
+  %18 = LOAD_TVALUE %16, 0i
+  STORE_TVALUE R6, %18, 0i, %17
+  JUMP bb_linear_25
+bb_linear_25:
+  CHECK_TAG R6, ttable, bb_fallback_5
+  %177 = LOAD_POINTER R6
+  %178 = LOAD_DOUBLE R2
+  %179 = TRY_NUM_TO_INDEX %178, bb_fallback_5
+  %180 = SUB_INT %179, 1i
+  CHECK_ARRAY_SIZE %177, %180, bb_fallback_5
+  CHECK_NO_METATABLE %177, bb_fallback_5
+  %183 = GET_ARR_ADDR %177, %180
+  %184 = LOAD_TAG %183, 0i
+  %185 = LOAD_TVALUE %183, 0i
+  STORE_TVALUE R5, %185, 0i, %184
+  CHECK_TAG R5, ttable, bb_fallback_7
+  %190 = LOAD_POINTER R5
+  %191 = GET_SLOT_NODE_ADDR %190, 2u, K0 ('x')
+  CHECK_SLOT_MATCH %191, K0 ('x'), bb_fallback_7
+  %193 = LOAD_TAG %191, 0i
+  %194 = LOAD_TVALUE %191, 0i
+  STORE_TVALUE R5, %194, 0i, %193
+  %219 = LOAD_TAG %183, 0i
+  STORE_TVALUE R6, %185, 0i, %219
+  %226 = GET_SLOT_NODE_ADDR %190, 6u, K1 ('y')
+  CHECK_SLOT_MATCH %226, K1 ('y'), bb_fallback_13
+  %228 = LOAD_TAG %226, 0i
+  %229 = LOAD_TVALUE %226, 0i
+  STORE_TVALUE R6, %229, 0i, %228
+  CHECK_TAG R5, tnumber, bb_fallback_15
+  CHECK_TAG R6, tnumber, bb_fallback_15
+  %236 = LOAD_DOUBLE R5
+  %238 = ADD_NUM %236, R6
+  STORE_DOUBLE R4, %238
+  STORE_TAG R4, tnumber
+  %264 = LOAD_TAG %183, 0i
+  STORE_TVALUE R5, %185, 0i, %264
+  %271 = GET_SLOT_NODE_ADDR %190, 11u, K2 ('z')
+  CHECK_SLOT_MATCH %271, K2 ('z'), bb_fallback_21
+  %273 = LOAD_TAG %271, 0i
+  %274 = LOAD_TVALUE %271, 0i
+  STORE_TVALUE R5, %274, 0i, %273
+  CHECK_TAG R5, tnumber, bb_fallback_23
+  %283 = ADD_NUM %238, R5
+  STORE_DOUBLE R3, %283
+  STORE_TAG R3, tnumber
+  INTERRUPT 14u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2418,7 +2818,65 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %12 = LOAD_POINTER R0
+  %13 = LOAD_DOUBLE R2
+  %14 = TRY_NUM_TO_INDEX %13, bb_fallback_3
+  %15 = SUB_INT %14, 1i
+  CHECK_ARRAY_SIZE %12, %15, bb_fallback_3
+  CHECK_NO_METATABLE %12, bb_fallback_3
+  %18 = GET_ARR_ADDR %12, %15
+  %19 = LOAD_TAG %18, 0i
+  %20 = LOAD_TVALUE %18, 0i
+  STORE_TVALUE R3, %20, 0i, %19
+  JUMP bb_linear_23
+bb_linear_23:
+  CHECK_TAG R3, tnumber, bb_fallback_5
+  %200 = LOAD_DOUBLE R3
+  %201 = LOAD_DOUBLE R1
+  %202 = ADD_NUM %200, %201
+  STORE_DOUBLE R3, %202
+  CHECK_READONLY %12, bb_fallback_7
+  STORE_SPLIT_TVALUE %18, tnumber, %202, 0i
+  %219 = ADD_NUM %13, 1
+  STORE_DOUBLE R3, %219
+  %223 = TRY_NUM_TO_INDEX %219, bb_fallback_9
+  %224 = SUB_INT %223, 1i
+  CHECK_ARRAY_SIZE %12, %224, bb_fallback_9
+  %227 = GET_ARR_ADDR %12, %224
+  %228 = LOAD_TAG %227, 0i
+  %229 = LOAD_TVALUE %227, 0i
+  STORE_TVALUE R4, %229, 0i, %228
+  %233 = MUL_NUM %201, %201
+  STORE_DOUBLE R5, %233
+  STORE_TAG R5, tnumber
+  CHECK_TAG R4, tnumber, bb_fallback_11
+  %238 = LOAD_DOUBLE R4
+  %239 = ADD_NUM %238, %233
+  STORE_SPLIT_TVALUE %227, tnumber, %239, 0i
+  %262 = LOAD_TAG %18, 0i
+  %263 = LOAD_TVALUE %18, 0i
+  STORE_TVALUE R4, %263, 0i, %262
+  %276 = LOAD_TAG %227, 0i
+  %277 = LOAD_TVALUE %227, 0i
+  STORE_TVALUE R5, %277, 0i, %276
+  CHECK_TAG R4, tnumber, bb_fallback_19
+  %284 = LOAD_DOUBLE R4
+  %286 = SUB_NUM %284, %239
+  STORE_SPLIT_TVALUE %18, tnumber, %286, 0i
+  INTERRUPT 13u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2598,7 +3056,64 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = GET_SLOT_NODE_ADDR %6, 0u, K0 ('a')
+  CHECK_SLOT_MATCH %7, K0 ('a'), bb_fallback_3
+  %9 = LOAD_TAG %7, 0i
+  %10 = LOAD_TVALUE %7, 0i
+  STORE_TVALUE R3, %10, 0i, %9
+  JUMP bb_linear_23
+bb_linear_23:
+  CHECK_TAG R3, ttable, bb_fallback_5
+  %122 = LOAD_POINTER R3
+  %123 = GET_SLOT_NODE_ADDR %122, 2u, K1 ('b')
+  CHECK_SLOT_MATCH %123, K1 ('b'), bb_fallback_5
+  %125 = LOAD_TAG %123, 0i
+  %126 = LOAD_TVALUE %123, 0i
+  STORE_TVALUE R3, %126, 0i, %125
+  %132 = LOAD_TAG %7, 0i
+  STORE_TVALUE R4, %10, 0i, %132
+  %139 = GET_SLOT_NODE_ADDR %122, 6u, K2 ('c')
+  CHECK_SLOT_MATCH %139, K2 ('c'), bb_fallback_9
+  %141 = LOAD_TAG %139, 0i
+  %142 = LOAD_TVALUE %139, 0i
+  STORE_TVALUE R4, %142, 0i, %141
+  CHECK_TAG R4, ttable, bb_fallback_11
+  %147 = LOAD_POINTER R4
+  %148 = GET_SLOT_NODE_ADDR %147, 8u, K3 ('x')
+  CHECK_SLOT_MATCH %148, K3 ('x'), bb_fallback_11
+  %150 = LOAD_TAG %148, 0i
+  %151 = LOAD_TVALUE %148, 0i
+  STORE_TVALUE R4, %151, 0i, %150
+  CHECK_TAG R3, tnumber, bb_fallback_13
+  CHECK_TAG R4, tnumber, bb_fallback_13
+  %158 = LOAD_DOUBLE R3
+  %160 = ADD_NUM %158, R4
+  STORE_DOUBLE R2, %160
+  STORE_TAG R2, tnumber
+  %176 = LOAD_TAG %139, 0i
+  STORE_TVALUE R3, %142, 0i, %176
+  %183 = GET_SLOT_NODE_ADDR %147, 15u, K4 ('y')
+  CHECK_SLOT_MATCH %183, K4 ('y'), bb_fallback_19
+  %185 = LOAD_TAG %183, 0i
+  %186 = LOAD_TVALUE %183, 0i
+  STORE_TVALUE R3, %186, 0i, %185
+  CHECK_TAG R3, tnumber, bb_fallback_21
+  %195 = ADD_NUM %160, R3
+  STORE_DOUBLE R1, %195
+  STORE_TAG R1, tnumber
+  INTERRUPT 18u
+  RETURN R1, 1i
+)T24"
+                             : R"(
 ; function test($arg0) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2672,7 +3187,48 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %8 = LOAD_POINTER R0
+  %9 = GET_SLOT_NODE_ADDR %8, 0u, K0 ('x')
+  CHECK_SLOT_MATCH %9, K0 ('x'), bb_fallback_3
+  %11 = LOAD_TAG %9, 0i
+  %12 = LOAD_TVALUE %9, 0i
+  STORE_TVALUE R2, %12, 0i, %11
+  JUMP bb_linear_23
+bb_linear_23:
+  CHECK_TAG R2, tnumber, bb_fallback_5
+  %137 = LOAD_DOUBLE R2
+  %138 = LOAD_DOUBLE R1
+  %139 = ADD_NUM %137, %138
+  STORE_DOUBLE R2, %139
+  CHECK_READONLY %8, bb_fallback_7
+  STORE_SPLIT_TVALUE %9, tnumber, %139, 0i
+  %152 = GET_SLOT_NODE_ADDR %8, 5u, K1 ('y')
+  CHECK_SLOT_MATCH %152, K1 ('y'), bb_fallback_9
+  %154 = LOAD_TAG %152, 0i
+  %155 = LOAD_TVALUE %152, 0i
+  STORE_TVALUE R2, %155, 0i, %154
+  %159 = MUL_NUM %138, %138
+  STORE_DOUBLE R3, %159
+  STORE_TAG R3, tnumber
+  CHECK_TAG R2, tnumber, bb_fallback_11
+  %164 = LOAD_DOUBLE R2
+  %165 = ADD_NUM %164, %159
+  STORE_SPLIT_TVALUE %152, tnumber, %165, 0i
+  %197 = SUB_NUM %139, %165
+  STORE_SPLIT_TVALUE %9, tnumber, %197, 0i
+  INTERRUPT 18u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2731,7 +3287,41 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tstring, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R2, 2
+  STORE_TAG R2, tnumber
+  %10 = LOAD_POINTER R0
+  %11 = GET_SLOT_NODE_ADDR %10, 1u, K0 ('x')
+  CHECK_SLOT_MATCH %11, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %10, bb_fallback_3
+  STORE_SPLIT_TVALUE %11, tnumber, 2, 0i
+  JUMP bb_linear_9
+bb_linear_9:
+  STORE_DOUBLE R2, 4
+  SET_SAVEDPC 5u
+  SET_TABLE R2, R0, R1
+  %52 = LOAD_POINTER R0
+  %53 = GET_SLOT_NODE_ADDR %52, 5u, K0 ('x')
+  CHECK_SLOT_MATCH %53, K0 ('x'), bb_fallback_5
+  %55 = LOAD_TAG %53, 0i
+  %56 = LOAD_TVALUE %53, 0i
+  STORE_TVALUE R3, %56, 0i, %55
+  CHECK_TAG R3, tnumber, bb_fallback_7
+  %61 = LOAD_DOUBLE R3
+  %62 = ADD_NUM %61, %61
+  STORE_DOUBLE R2, %62
+  INTERRUPT 8u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2785,7 +3375,36 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tstring, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R2, 2
+  STORE_TAG R2, tnumber
+  %10 = LOAD_POINTER R0
+  %11 = GET_SLOT_NODE_ADDR %10, 1u, K0 ('x')
+  CHECK_SLOT_MATCH %11, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %10, bb_fallback_3
+  STORE_SPLIT_TVALUE %11, tnumber, 2, 0i
+  JUMP bb_linear_11
+bb_linear_11:
+  STORE_TAG R2, tnil
+  CHECK_ARRAY_SIZE %10, 0i, bb_fallback_5
+  CHECK_NO_METATABLE %10, bb_fallback_5
+  %65 = GET_ARR_ADDR %10, 0i
+  %66 = LOAD_TVALUE R2, 0i, tnil
+  STORE_TVALUE %65, %66, 0i, tnil
+  STORE_DOUBLE R2, 4
+  STORE_TAG R2, tnumber
+  INTERRUPT 8u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2936,7 +3555,32 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R1, 14
+  STORE_TAG R1, tnumber
+  %8 = LOAD_POINTER R0
+  %9 = GET_SLOT_NODE_ADDR %8, 1u, K0 ('x')
+  CHECK_SLOT_MATCH %9, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %8, bb_fallback_3
+  STORE_SPLIT_TVALUE %9, tnumber, 14, 0i
+  JUMP bb_linear_15
+bb_linear_15:
+  STORE_DOUBLE R1, 28
+  %87 = GET_SLOT_NODE_ADDR %8, 4u, K1 ('y')
+  CHECK_SLOT_MATCH %87, K1 ('y'), bb_fallback_5
+  STORE_SPLIT_TVALUE %87, tnumber, 28, 0i
+  STORE_SPLIT_TVALUE %9, tnumber, -14, 0i
+  INTERRUPT 13u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function test($arg0) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -2981,7 +3625,38 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = GET_SLOT_NODE_ADDR %6, 0u, K0 ('y')
+  CHECK_SLOT_MATCH %7, K0 ('y'), bb_fallback_3
+  %9 = LOAD_TAG %7, 0i
+  %10 = LOAD_TVALUE %7, 0i
+  STORE_TVALUE R1, %10, 0i, %9
+  JUMP bb_linear_11
+bb_linear_11:
+  %55 = GET_SLOT_NODE_ADDR %6, 2u, K1 ('x')
+  CHECK_SLOT_MATCH %55, K1 ('x'), bb_fallback_5
+  %57 = LOAD_TAG %55, 0i
+  %58 = LOAD_TVALUE %55, 0i
+  STORE_TVALUE R2, %58, 0i, %57
+  CHECK_READONLY %6, bb_fallback_7
+  %65 = LOAD_TAG R1, 0i
+  STORE_TVALUE %55, %10, 0i, %65
+  BARRIER_TABLE_FORWARD %6, R1, undef
+  %74 = LOAD_TAG R2, 0i
+  STORE_TVALUE %7, %58, 0i, %74
+  BARRIER_TABLE_FORWARD %6, R2, undef
+  INTERRUPT 8u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function test($arg0) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -3027,7 +3702,32 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_ENV
+  %7 = GET_SLOT_NODE_ADDR %6, 0u, K0 ('x')
+  CHECK_SLOT_MATCH %7, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %6, bb_fallback_3
+  %11 = LOAD_TVALUE R0, 0i, tnumber
+  STORE_TVALUE %7, %11, 0i, tnumber
+  JUMP bb_linear_9
+bb_linear_9:
+  %42 = GET_SLOT_NODE_ADDR %6, 2u, K1 ('y')
+  CHECK_SLOT_MATCH %42, K1 ('y'), bb_fallback_5
+  %45 = LOAD_TVALUE R1, 0i, tnumber
+  STORE_TVALUE %42, %45, 0i, tnumber
+  STORE_TVALUE %7, %45, 0i, tnumber
+  INTERRUPT 6u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -3070,7 +3770,46 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = GET_SLOT_NODE_ADDR %6, 0u, K0 ('y')
+  CHECK_SLOT_MATCH %7, K0 ('y'), bb_fallback_3
+  %9 = LOAD_TAG %7, 0i
+  %10 = LOAD_TVALUE %7, 0i
+  STORE_TVALUE R1, %10, 0i, %9
+  JUMP bb_linear_15
+bb_linear_15:
+  %81 = LOAD_TAG %7, 0i
+  STORE_TVALUE R2, %10, 0i, %81
+  CHECK_TAG R2, ttable, bb_fallback_7
+  %87 = LOAD_POINTER R2
+  %88 = GET_SLOT_NODE_ADDR %87, 4u, K1 ('b')
+  CHECK_SLOT_MATCH %88, K1 ('b'), bb_fallback_7
+  %90 = LOAD_TAG %88, 0i
+  %91 = LOAD_TVALUE %88, 0i
+  STORE_TVALUE R2, %91, 0i, %90
+  %97 = GET_SLOT_NODE_ADDR %87, 6u, K2 ('a')
+  CHECK_SLOT_MATCH %97, K2 ('a'), bb_fallback_9
+  CHECK_READONLY %87, bb_fallback_9
+  %100 = LOAD_TAG R2, 0i
+  STORE_TVALUE %97, %91, 0i, %100
+  BARRIER_TABLE_FORWARD %87, R2, undef
+  STORE_DOUBLE R2, 3
+  STORE_TAG R2, tnumber
+  %117 = GET_SLOT_NODE_ADDR %87, 11u, K3 ('c')
+  CHECK_SLOT_MATCH %117, K3 ('c'), bb_fallback_13
+  STORE_SPLIT_TVALUE %117, tnumber, 3, 0i
+  INTERRUPT 13u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function foo($arg0) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -3234,7 +3973,37 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = LOAD_POINTER R0
+  %7 = GET_SLOT_NODE_ADDR %6, 0u, K0 ('x')
+  CHECK_SLOT_MATCH %7, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %6, bb_fallback_3
+  %10 = LOAD_TAG R1, 0i
+  %11 = LOAD_TVALUE R1, 0i
+  STORE_TVALUE %7, %11, 0i, %10
+  BARRIER_TABLE_FORWARD %6, R1, undef
+  JUMP bb_linear_9
+bb_linear_9:
+  %44 = GET_SLOT_NODE_ADDR %6, 2u, K1 ('y')
+  CHECK_SLOT_MATCH %44, K1 ('y'), bb_fallback_5
+  %47 = LOAD_TAG R2, 0i
+  %48 = LOAD_TVALUE R2, 0i
+  STORE_TVALUE %44, %48, 0i, %47
+  BARRIER_TABLE_FORWARD %6, R2, undef
+  CHECK_NODE_VALUE %7, bb_fallback_7
+  %55 = LOAD_TAG %7, 0i
+  STORE_TVALUE R3, %11, 0i, %55
+  INTERRUPT 6u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -3449,7 +4218,55 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function getsum($arg0) line 2
+; R1: number from 0 to 13
+; R4: number from 1 to 11
+bb_bytecode_0:
+  STORE_DOUBLE R1, 0
+  STORE_TAG R1, tnumber
+  STORE_DOUBLE R4, 1
+  STORE_TAG R4, tnumber
+  %4 = LOAD_TAG R0, 0i
+  %5 = LOAD_TVALUE R0, 0i
+  STORE_TVALUE R2, %5, 0i, %4
+  STORE_DOUBLE R3, 1
+  STORE_TAG R3, tnumber
+  CHECK_TAG %4, tnumber, exit(4)
+  %13 = LOAD_DOUBLE R0
+  JUMP_CMP_NUM 1, %13, not_le, bb_bytecode_4, bb_bytecode_1
+bb_bytecode_1:
+  INTERRUPT 5u
+  STORE_DOUBLE R5, 10
+  STORE_TAG R5, tnumber
+  CHECK_TAG R4, tnumber, bb_fallback_6
+  JUMP_CMP_NUM R4, 10, not_lt, bb_bytecode_2, bb_5
+bb_5:
+  CHECK_TAG R1, tnumber, exit(8)
+  CHECK_TAG R4, tnumber, exit(8)
+  %33 = LOAD_DOUBLE R1
+  %35 = ADD_NUM %33, R4
+  STORE_DOUBLE R1, %35
+  JUMP bb_bytecode_3
+bb_bytecode_2:
+  CHECK_TAG R1, tnumber, exit(10)
+  CHECK_TAG R4, tnumber, exit(10)
+  %42 = LOAD_DOUBLE R1
+  %44 = MUL_NUM %42, R4
+  STORE_DOUBLE R1, %44
+  JUMP bb_bytecode_3
+bb_bytecode_3:
+  CHECK_GC
+  %48 = LOAD_DOUBLE R2
+  %49 = LOAD_DOUBLE R4
+  %50 = ADD_NUM %49, 1
+  STORE_DOUBLE R4, %50
+  JUMP_CMP_NUM %50, %48, le, bb_bytecode_1, bb_bytecode_4
+bb_bytecode_4:
+  INTERRUPT 12u
+  RETURN R1, 1i
+)T24"
+                             : R"(
 ; function getsum($arg0) line 2
 ; R1: number from 0 to 13
 ; R4: number from 1 to 11
@@ -3606,7 +4423,48 @@ end
                    /* includeIrTypes */ true,
                    /* debugLevel */ 2
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo(arr, i) line 4
+; R0: table [argument 'arr']
+; R2: table from 0 to 6 [local 'v']
+; R3: vector from 3 to 5
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_TAG R1, tnumber, bb_fallback_3
+  %8 = LOAD_POINTER R0
+  %9 = LOAD_DOUBLE R1
+  %10 = TRY_NUM_TO_INDEX %9, bb_fallback_3
+  %11 = SUB_INT %10, 1i
+  CHECK_ARRAY_SIZE %8, %11, bb_fallback_3
+  CHECK_NO_METATABLE %8, bb_fallback_3
+  %14 = GET_ARR_ADDR %8, %11
+  %15 = LOAD_TAG %14, 0i
+  %16 = LOAD_TVALUE %14, 0i
+  STORE_TVALUE R2, %16, 0i, %15
+  JUMP bb_4
+bb_4:
+  CHECK_TAG R2, ttable, exit(1)
+  %24 = LOAD_POINTER R2
+  %25 = GET_SLOT_NODE_ADDR %24, 1u, K0 ('pos')
+  CHECK_SLOT_MATCH %25, K0 ('pos'), bb_fallback_5
+  %27 = LOAD_TAG %25, 0i
+  %28 = LOAD_TVALUE %25, 0i
+  STORE_TVALUE R3, %28, 0i, %27
+  JUMP bb_6
+bb_6:
+  CHECK_TAG R3, tvector, exit(3)
+  %35 = LOAD_FLOAT R3, 4i
+  %36 = FLOAT_TO_NUM %35
+  STORE_DOUBLE R3, %36
+  STORE_TAG R3, tnumber
+  INTERRUPT 5u
+  RETURN R3, 1i
+)T24"
+                             : R"(
 ; function foo(arr, i) line 4
 ; R0: table [argument 'arr']
 ; R2: table from 0 to 6 [local 'v']
@@ -3768,7 +4626,57 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 4
+; R0: table [argument]
+; R2: vector from 4 to 6
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_TAG R1, tnumber, bb_fallback_3
+  %8 = LOAD_POINTER R0
+  %9 = LOAD_DOUBLE R1
+  %10 = TRY_NUM_TO_INDEX %9, bb_fallback_3
+  %11 = SUB_INT %10, 1i
+  CHECK_ARRAY_SIZE %8, %11, bb_fallback_3
+  CHECK_NO_METATABLE %8, bb_fallback_3
+  %14 = GET_ARR_ADDR %8, %11
+  %15 = LOAD_TAG %14, 0i
+  %16 = LOAD_TVALUE %14, 0i
+  STORE_TVALUE R2, %16, 0i, %15
+  JUMP bb_4
+bb_4:
+  CHECK_TAG R2, ttable, bb_fallback_5
+  %24 = LOAD_POINTER R2
+  %25 = GET_SLOT_NODE_ADDR %24, 1u, K0 ('normal')
+  CHECK_SLOT_MATCH %25, K0 ('normal'), bb_fallback_5
+  %27 = LOAD_TAG %25, 0i
+  %28 = LOAD_TVALUE %25, 0i
+  STORE_TVALUE R2, %28, 0i, %27
+  JUMP bb_6
+bb_6:
+  %33 = LOAD_TVALUE K1 (0.707000017, 0, 0.707000017), 0i, tvector
+  STORE_TVALUE R4, %33, 0i, tvector
+  CHECK_TAG R2, tvector, exit(4)
+  %39 = LOAD_FLOAT R2, 0i
+  %41 = MUL_FLOAT %39, 0.7070000171661377
+  %42 = LOAD_FLOAT R2, 4i
+  %44 = MUL_FLOAT %42, 0
+  %45 = LOAD_FLOAT R2, 8i
+  %47 = MUL_FLOAT %45, 0.7070000171661377
+  %48 = ADD_FLOAT %41, %44
+  %49 = ADD_FLOAT %48, %47
+  %50 = FLOAT_TO_NUM %49
+  STORE_DOUBLE R2, %50
+  STORE_TAG R2, tnumber
+  ADJUST_STACK_TO_REG R2, 1i
+  INTERRUPT 7u
+  RETURN R2, -1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 4
 ; R0: table [argument]
 ; R2: vector from 4 to 6
@@ -3832,7 +4740,34 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+; R3: vector from 1 to 2
+bb_bytecode_0:
+  CHECK_TAG R0, ttable, bb_fallback_1
+  CHECK_TAG R1, tnumber, bb_fallback_1
+  %4 = LOAD_POINTER R0
+  %5 = LOAD_DOUBLE R1
+  %6 = TRY_NUM_TO_INDEX %5, bb_fallback_1
+  %7 = SUB_INT %6, 1i
+  CHECK_ARRAY_SIZE %4, %7, bb_fallback_1
+  CHECK_NO_METATABLE %4, bb_fallback_1
+  %10 = GET_ARR_ADDR %4, %7
+  %11 = LOAD_TAG %10, 0i
+  %12 = LOAD_TVALUE %10, 0i
+  STORE_TVALUE R3, %12, 0i, %11
+  JUMP bb_2
+bb_2:
+  CHECK_TAG R3, tvector, exit(1)
+  %20 = LOAD_TVALUE R3, 0i, tvector
+  %22 = FLOAT_TO_VEC 5
+  %23 = DIV_VEC %20, %22
+  %24 = TAG_VECTOR %23
+  STORE_TVALUE R2, %24, 0i, tvector
+  INTERRUPT 2u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 ; R3: vector from 1 to 2
 bb_bytecode_0:
@@ -3909,7 +4844,83 @@ end
                    /* includeIrTypes */ true,
                    /* debugLevel */ 2
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo(a) line 4
+; R0: table [argument 'a']
+; R1: number from 0 to 15 [local 'sum']
+; R5: number from 6 to 12 [local 'k']
+; R6: table from 6 to 12 [local 'v']
+; R7: vector from 9 to 11
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  STORE_DOUBLE R1, 0
+  STORE_TAG R1, tnumber
+  GET_CACHED_IMPORT R2, K1 (nil), 1073741824u ('ipairs'), 2u
+  %9 = LOAD_TVALUE R0, 0i, ttable
+  STORE_TVALUE R3, %9, 0i, ttable
+  INTERRUPT 4u
+  SET_SAVEDPC 6u
+  CALL R2, 1i, 3i
+  CHECK_SAFE_ENV exit(6)
+  CHECK_TAG R3, ttable, bb_fallback_5
+  CHECK_TAG R4, tnumber, bb_fallback_5
+  JUMP_CMP_NUM R4, 0, not_eq, bb_fallback_5, bb_6
+bb_6:
+  STORE_TAG R2, tnil
+  STORE_POINTER R4, 0i
+  STORE_EXTRA R4, 128i
+  STORE_TAG R4, tlightuserdata
+  JUMP bb_bytecode_3
+bb_bytecode_2:
+  CHECK_TAG R6, ttable, exit(7)
+  %29 = LOAD_POINTER R6
+  %30 = GET_SLOT_NODE_ADDR %29, 7u, K2 ('pos')
+  CHECK_SLOT_MATCH %30, K2 ('pos'), bb_fallback_7
+  %32 = LOAD_TAG %30, 0i
+  %33 = LOAD_TVALUE %30, 0i
+  STORE_TVALUE R7, %33, 0i, %32
+  JUMP bb_8
+bb_8:
+  CHECK_TAG R7, tvector, exit(9)
+  %40 = LOAD_FLOAT R7, 0i
+  %41 = FLOAT_TO_NUM %40
+  STORE_DOUBLE R7, %41
+  STORE_TAG R7, tnumber
+  CHECK_TAG R1, tnumber, exit(11)
+  %48 = LOAD_DOUBLE R1
+  %50 = ADD_NUM %48, %41
+  STORE_DOUBLE R1, %50
+  JUMP bb_bytecode_3
+bb_bytecode_3:
+  INTERRUPT 12u
+  CHECK_GC
+  CHECK_TAG R2, tnil, bb_fallback_10
+  %57 = LOAD_POINTER R3
+  %58 = LOAD_INT R4
+  %59 = GET_ARR_ADDR %57, %58
+  CHECK_ARRAY_SIZE %57, %58, bb_9
+  %61 = LOAD_TAG %59
+  JUMP_EQ_TAG %61, tnil, bb_9, bb_11
+bb_11:
+  %63 = ADD_INT %58, 1i
+  STORE_INT R4, %63
+  %65 = INT_TO_NUM %63
+  STORE_DOUBLE R5, %65
+  STORE_TAG R5, tnumber
+  %68 = LOAD_TAG %59, 0i
+  %69 = LOAD_TVALUE %59, 0i
+  STORE_TVALUE R6, %69, 0i, %68
+  JUMP bb_bytecode_2
+bb_9:
+  INTERRUPT 14u
+  RETURN R1, 1i
+)T24"
+                             : R"(
 ; function foo(a) line 4
 ; R0: table [argument 'a']
 ; R1: number from 0 to 15 [local 'sum']
@@ -4149,7 +5160,7 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0) line 2
 ; R0: mat3 [argument]
 bb_0:
@@ -4166,8 +5177,8 @@ bb_bytecode_1:
   %15 = LOAD_TVALUE R3, 0i, tvector
   %16 = MUL_VEC %14, %15
   %17 = TAG_VECTOR %16
-  STORE_TVALUE R1, %17
-  INTERRUPT 5u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %17, 0i, tvector\n" : "  STORE_TVALUE R1, %17\n") +
+            R"(  INTERRUPT 5u
   RETURN R1, 1i
 )"
     );
@@ -4188,7 +5199,41 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+; R0: vec2 [argument]
+; R1: vec2 [argument]
+bb_0:
+  CHECK_TAG R0, tuserdata, exit(entry)
+  CHECK_TAG R1, tuserdata, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %7 = LOAD_TVALUE R1, 0i, tuserdata
+  STORE_TVALUE R4, %7, 0i, tuserdata
+  %11 = LOAD_POINTER R0
+  CHECK_USERDATA_TAG %11, 12i, exit(1)
+  %15 = LOAD_POINTER R1
+  CHECK_USERDATA_TAG %15, 12i, exit(1)
+  %17 = BUFFER_READF32 %11, 0i, tuserdata
+  %18 = BUFFER_READF32 %15, 0i, tuserdata
+  %19 = FLOAT_TO_NUM %17
+  %20 = FLOAT_TO_NUM %18
+  %21 = MUL_NUM %19, %20
+  %22 = BUFFER_READF32 %11, 4i, tuserdata
+  %23 = BUFFER_READF32 %15, 4i, tuserdata
+  %24 = FLOAT_TO_NUM %22
+  %25 = FLOAT_TO_NUM %23
+  %26 = MUL_NUM %24, %25
+  %27 = ADD_NUM %21, %26
+  STORE_DOUBLE R2, %27
+  STORE_TAG R2, tnumber
+  ADJUST_STACK_TO_REG R2, 1i
+  INTERRUPT 4u
+  RETURN R2, -1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 ; R0: vec2 [argument]
 ; R1: vec2 [argument]
@@ -4240,7 +5285,45 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+; R0: vec2 [argument]
+; R1: vec2 [argument]
+bb_0:
+  CHECK_TAG R0, tuserdata, exit(entry)
+  CHECK_TAG R1, tuserdata, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %7 = LOAD_TVALUE R1, 0i, tuserdata
+  STORE_TVALUE R4, %7, 0i, tuserdata
+  %11 = LOAD_POINTER R0
+  CHECK_USERDATA_TAG %11, 12i, exit(1)
+  %15 = LOAD_POINTER R1
+  CHECK_USERDATA_TAG %15, 12i, exit(1)
+  %17 = BUFFER_READF32 %11, 0i, tuserdata
+  %18 = BUFFER_READF32 %15, 0i, tuserdata
+  %19 = FLOAT_TO_NUM %17
+  %20 = FLOAT_TO_NUM %18
+  %21 = MIN_NUM %19, %20
+  %22 = BUFFER_READF32 %11, 4i, tuserdata
+  %23 = BUFFER_READF32 %15, 4i, tuserdata
+  %24 = FLOAT_TO_NUM %22
+  %25 = FLOAT_TO_NUM %23
+  %26 = MIN_NUM %24, %25
+  %27 = NUM_TO_FLOAT %21
+  %28 = NUM_TO_FLOAT %26
+  %29 = NEW_USERDATA 8i, 12i
+  BUFFER_WRITEF32 %29, 0i, %27, tuserdata
+  BUFFER_WRITEF32 %29, 4i, %28, tuserdata
+  STORE_POINTER R2, %29
+  STORE_TAG R2, tuserdata
+  ADJUST_STACK_TO_REG R2, 1i
+  INTERRUPT 4u
+  RETURN R2, -1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 ; R0: vec2 [argument]
 ; R1: vec2 [argument]
@@ -4459,7 +5542,7 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0) line 2
 ; R0: mat3 [argument]
 bb_0:
@@ -4470,9 +5553,14 @@ bb_2:
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
   GET_CACHED_IMPORT R1, K1 (nil), 1073741824u ('print'), 1u
-  %6 = LOAD_TVALUE R0, 0i, tuserdata
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %7 = LOAD_TVALUE R0, 0i, tuserdata
+  STORE_TVALUE R2, %7, 0i, tuserdata
+)"
+                                  : R"(  %6 = LOAD_TVALUE R0, 0i, tuserdata
   STORE_TVALUE R2, %6
-  GET_CACHED_IMPORT R3, K4 (nil), 2149583872u ('vec2'.'create'), 4u
+)") +
+            R"(  GET_CACHED_IMPORT R3, K4 (nil), 2149583872u ('vec2'.'create'), 4u
   STORE_DOUBLE R4, 0
   STORE_TAG R4, tnumber
   STORE_DOUBLE R5, 0
@@ -4502,7 +5590,7 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0) line 2
 ; R0: vector [argument]
 ; R2: vector from 3 to 4
@@ -4520,8 +5608,8 @@ bb_bytecode_1:
   %15 = LOAD_TVALUE K1 (0, 1, 0), 0i, tvector
   %23 = ADD_VEC %12, %15
   %24 = TAG_VECTOR %23
-  STORE_TVALUE R1, %24
-  INTERRUPT 4u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %24, 0i, tvector\n" : "  STORE_TVALUE R1, %24\n") +
+            R"(  INTERRUPT 4u
   RETURN R1, 1i
 )"
     );
@@ -4542,7 +5630,7 @@ end
 )",
                    /* includeIrTypes */ true
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0) line 2
 ; R0: vector [argument]
 ; R1: vector from 0 to 3
@@ -4556,8 +5644,8 @@ bb_bytecode_1:
   %11 = LOAD_TVALUE R0, 0i, tvector
   %12 = ADD_VEC %4, %11
   %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
-  INTERRUPT 2u
+)") + (LUA_VECTOR_SIZE == 4 ? "  STORE_TVALUE R1, %13, 0i, tvector\n" : "  STORE_TVALUE R1, %13\n") +
+            R"(  INTERRUPT 2u
   RETURN R1, 1i
 )"
     );
@@ -5117,16 +6205,20 @@ bb_bytecode_2:
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLoadStoreOnlySamePrecision")
 {
     ensureVectorFloat();
-    ensureVectorSize3();
+
+    const char* component = LUA_VECTOR_SIZE == 4 ? "W" : "X";
+
+    std::string source = std::string(R"(
+local function test(x: number, y: number)
+    local vec = vector.create(x, y, 0, x)
+    return vec.)") + component +
+                         R"( + vec.Y + vec.Z
+end
+)";
 
     CHECK_EQ(
-        "\n" + getCodegenAssembly(R"(
-local function test(x: number, y: number)
-    local vec = vector.create(x, y, 0)
-    return vec.X + vec.Y + vec.Z
-end
-)"),
-        R"(
+        "\n" + getCodegenAssembly(source.c_str()),
+        std::string(R"(
 ; function test($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -5136,17 +6228,32 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %15 = LOAD_DOUBLE R0
-  %16 = LOAD_DOUBLE R1
-  %18 = NUM_TO_FLOAT %15
-  %19 = NUM_TO_FLOAT %16
-  %27 = FLOAT_TO_NUM %18
-  %33 = FLOAT_TO_NUM %19
-  %42 = ADD_NUM %27, %33
-  %57 = ADD_NUM %42, 0
-  STORE_DOUBLE R3, %57
-  STORE_TAG R3, tnumber
-  INTERRUPT 16u
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  %26 = LOAD_DOUBLE R0
+  %27 = LOAD_DOUBLE R1
+  %30 = NUM_TO_FLOAT %26
+  %31 = NUM_TO_FLOAT %27
+  %40 = FLOAT_TO_NUM %30
+  %46 = FLOAT_TO_NUM %31
+  %55 = ADD_NUM %40, %46
+  JUMP bb_5
+bb_5:
+  %74 = ADD_NUM %55, 0
+  STORE_SPLIT_TVALUE R3, tnumber, %74
+  JUMP bb_7
+bb_7:
+)"
+                                  : R"(  %21 = LOAD_DOUBLE R0
+  %22 = LOAD_DOUBLE R1
+  %24 = NUM_TO_FLOAT %21
+  %25 = NUM_TO_FLOAT %22
+  %33 = FLOAT_TO_NUM %24
+  %39 = FLOAT_TO_NUM %25
+  %48 = ADD_NUM %33, %39
+  %63 = ADD_NUM %48, 0
+  STORE_SPLIT_TVALUE R3, tnumber, %63
+)") +
+            R"(  INTERRUPT 16u
   RETURN R3, 1i
 )"
     );
@@ -5380,7 +6487,71 @@ local function foo(buf: buffer, a: number)
     return s
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tbuffer, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  STORE_DOUBLE R2, 0
+  STORE_TAG R2, tnumber
+  STORE_DOUBLE R5, 0
+  STORE_TAG R5, tnumber
+  GET_CACHED_IMPORT R6, K3 (nil), 2148534272u ('buffer'.'len'), 3u
+  %13 = LOAD_TVALUE R0, 0i, tbuffer
+  STORE_TVALUE R7, %13, 0i, tbuffer
+  INTERRUPT 5u
+  SET_SAVEDPC 7u
+  CALL R6, 1i, 1i
+  CHECK_TAG R6, tnumber, bb_fallback_5
+  %20 = LOAD_DOUBLE R6
+  %21 = SUB_NUM %20, 1
+  STORE_DOUBLE R3, %21
+  STORE_TAG R3, tnumber
+  JUMP bb_6
+bb_6:
+  STORE_DOUBLE R4, 12
+  STORE_TAG R4, tnumber
+  CHECK_TAG R3, tnumber, exit(9)
+  %34 = LOAD_DOUBLE R3
+  JUMP_CMP_NUM R5, %34, not_le, bb_bytecode_3, bb_bytecode_2
+bb_bytecode_2:
+  implicit CHECK_SAFE_ENV exit(10)
+  INTERRUPT 10u
+  CHECK_TAG R5, tnumber, exit(12)
+  %43 = LOAD_POINTER R0
+  %44 = LOAD_DOUBLE R5
+  %45 = NUM_TO_INT %44
+  CHECK_BUFFER_LEN %43, %45, 0i, 12i, %44, exit(12)
+  %47 = BUFFER_READF32 %43, %45, tbuffer
+  %48 = FLOAT_TO_NUM %47
+  %65 = ADD_INT %45, 4i
+  %67 = BUFFER_READF32 %43, %65, tbuffer
+  %68 = FLOAT_TO_NUM %67
+  %78 = MUL_NUM %48, %68
+  %94 = ADD_INT %45, 8i
+  %96 = BUFFER_READF32 %43, %94, tbuffer
+  %97 = FLOAT_TO_NUM %96
+  %107 = MUL_NUM %78, %97
+  CHECK_TAG R2, tnumber, bb_exit_10
+   ; exit sync: R8, R7, R6, {%97, %78, %107}
+  %114 = LOAD_DOUBLE R2
+  %116 = ADD_NUM %114, %107
+  STORE_DOUBLE R2, %116
+  CHECK_GC
+  %119 = LOAD_DOUBLE R3
+  %121 = ADD_NUM %44, 12
+  STORE_DOUBLE R5, %121
+  JUMP_CMP_NUM %121, %119, le, bb_bytecode_2, bb_bytecode_3
+bb_bytecode_3:
+  INTERRUPT 35u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
@@ -6016,7 +7187,57 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0) line 2
+bb_0:
+  CHECK_TAG R0, tbuffer, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %15 = LOAD_POINTER R0
+  CHECK_BUFFER_LEN %15, 0i, 0i, 8i, undef, bb_exit_12
+   ; exit sync: R4, R3, {}
+  BUFFER_WRITEF64 %15, 0i, 3.1400000000000001, tbuffer
+  STORE_SPLIT_TVALUE R3, tnumber, 4
+  STORE_SPLIT_TVALUE R4, tnumber, 170
+  SET_SAVEDPC 12u
+  %28 = INVOKE_FASTCALL 67u, R1, R0, R3, R4, 3i, 1i
+  CHECK_FASTCALL_RES %28, bb_fallback_4
+  JUMP bb_linear_11
+bb_linear_11:
+  STORE_DOUBLE R4, 5
+  STORE_TAG R4, tnumber
+  STORE_DOUBLE R5, 187
+  STORE_TAG R5, tnumber
+  SET_SAVEDPC 20u
+  %103 = INVOKE_FASTCALL 67u, R2, R0, R4, R5, 3i, 1i
+  CHECK_FASTCALL_RES %103, bb_fallback_6
+  STORE_DOUBLE R5, 0
+  STORE_TAG R5, tnumber
+  STORE_DOUBLE R6, 255
+  STORE_TAG R6, tnumber
+  SET_SAVEDPC 28u
+  %112 = INVOKE_FASTCALL 67u, R3, R0, R5, R6, 3i, 1i
+  CHECK_FASTCALL_RES %112, bb_fallback_8
+  CHECK_BUFFER_LEN %15, 0i, 0i, 8i, undef, exit(34)
+  %118 = BUFFER_READF64 %15, 0i, tbuffer
+  STORE_DOUBLE R4, %118
+  STORE_TAG R4, tnumber
+  %121 = LOAD_TAG R1, 0i
+  %122 = LOAD_TVALUE R1, 0i
+  STORE_TVALUE R5, %122, 0i, %121
+  %124 = LOAD_TAG R2, 0i
+  %125 = LOAD_TVALUE R2, 0i
+  STORE_TVALUE R6, %125, 0i, %124
+  %127 = LOAD_TAG R3, 0i
+  %128 = LOAD_TVALUE R3, 0i
+  STORE_TVALUE R7, %128, 0i, %127
+  INTERRUPT 42u
+  RETURN R4, 4i
+)T24"
+                             : R"(
 ; function foo($arg0) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
@@ -6266,7 +7487,53 @@ local function bar()
     return foo(3, 4)
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_bytecode_0:
+  JUMP_IF_TRUTHY R0, bb_1, bb_2
+bb_1:
+  JUMP bb_3
+bb_2:
+  %5 = LOAD_TAG K0 (0), 0i
+  %6 = LOAD_TVALUE K0 (0), 0i
+  STORE_TVALUE R0, %6, 0i, %5
+  JUMP bb_3
+bb_3:
+  JUMP_IF_TRUTHY R1, bb_4, bb_5
+bb_4:
+  JUMP bb_6
+bb_5:
+  %14 = LOAD_TAG K0 (0), 0i
+  %15 = LOAD_TVALUE K0 (0), 0i
+  STORE_TVALUE R1, %15, 0i, %14
+  JUMP bb_6
+bb_6:
+  CHECK_TAG R0, tnumber, bb_fallback_7
+  CHECK_TAG R1, tnumber, bb_fallback_7
+  %22 = LOAD_DOUBLE R0
+  %24 = ADD_NUM %22, R1
+  STORE_DOUBLE R2, %24
+  STORE_TAG R2, tnumber
+  JUMP bb_8
+bb_8:
+  INTERRUPT 3u
+  RETURN R2, 1i
+; function bar() line 8
+bb_bytecode_0:
+  JUMP bb_1
+bb_1:
+  JUMP bb_3
+bb_3:
+  JUMP bb_4
+bb_4:
+  JUMP bb_6
+bb_6:
+  STORE_DOUBLE R0, 7
+  STORE_TAG R0, tnumber
+  INTERRUPT 5u
+  RETURN R0, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
@@ -6309,7 +7576,45 @@ local function bar()
     return a, b
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_bytecode_0:
+  JUMP_IF_TRUTHY R0, bb_1, bb_2
+bb_2:
+  %1 = LOAD_TAG R0, 0i
+  %2 = LOAD_TVALUE R0, 0i
+  STORE_TVALUE R2, %2, 0i, %1
+  JUMP bb_3
+bb_1:
+  %5 = LOAD_TAG R1, 0i
+  %6 = LOAD_TVALUE R1, 0i
+  STORE_TVALUE R2, %6, 0i, %5
+  JUMP bb_3
+bb_3:
+  JUMP_IF_TRUTHY R0, bb_4, bb_5
+bb_4:
+  %10 = LOAD_TAG R0, 0i
+  %11 = LOAD_TVALUE R0, 0i
+  STORE_TVALUE R3, %11, 0i, %10
+  JUMP bb_6
+bb_5:
+  %14 = LOAD_TAG R1, 0i
+  %15 = LOAD_TVALUE R1, 0i
+  STORE_TVALUE R3, %15, 0i, %14
+  JUMP bb_6
+bb_6:
+  INTERRUPT 2u
+  RETURN R2, 2i
+; function bar() line 5
+bb_bytecode_0:
+  STORE_DOUBLE R0, 4
+  STORE_TAG R0, tnumber
+  STORE_DOUBLE R1, 3
+  STORE_TAG R1, tnumber
+  INTERRUPT 2u
+  RETURN R0, 2i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
@@ -6342,7 +7647,35 @@ local function foo(a: boolean, b: number, c: number)
     return x + 1
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tboolean, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  JUMP_IF_FALSY R0, bb_bytecode_2, bb_5
+bb_5:
+  %10 = LOAD_TVALUE R1, 0i, tnumber
+  STORE_TVALUE R3, %10, 0i, tnumber
+  JUMP bb_bytecode_3
+bb_bytecode_2:
+  %14 = LOAD_TVALUE R2, 0i, tnumber
+  STORE_TVALUE R3, %14, 0i, tnumber
+  JUMP bb_bytecode_3
+bb_bytecode_3:
+  CHECK_TAG R3, tnumber, exit(4)
+  %19 = LOAD_DOUBLE R3
+  %20 = ADD_NUM %19, 1
+  STORE_DOUBLE R4, %20
+  STORE_TAG R4, tnumber
+  INTERRUPT 5u
+  RETURN R4, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tboolean, exit(entry)
@@ -6383,7 +7716,35 @@ local function foo(a: boolean, b: number, c: number)
     return x + 1
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+bb_0:
+  CHECK_TAG R0, tboolean, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  JUMP_IF_FALSY R0, bb_bytecode_2, bb_5
+bb_5:
+  %10 = LOAD_TVALUE R1, 0i, tnumber
+  STORE_TVALUE R3, %10, 0i, tnumber
+  JUMP bb_bytecode_3
+bb_bytecode_2:
+  %14 = LOAD_TVALUE R2, 0i, tnumber
+  STORE_TVALUE R3, %14, 0i, tnumber
+  JUMP bb_bytecode_3
+bb_bytecode_3:
+  CHECK_TAG R3, tnumber, exit(4)
+  %19 = LOAD_DOUBLE R3
+  %20 = ADD_NUM %19, 1
+  STORE_DOUBLE R4, %20
+  STORE_TAG R4, tnumber
+  INTERRUPT 5u
+  RETURN R4, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tboolean, exit(entry)
@@ -7060,7 +8421,37 @@ end
 
 function setm(x) m = x end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 4
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %6 = GET_UPVALUE_ADDR U0
+  %7 = LOAD_TAG %6, 0i
+  %8 = LOAD_TVALUE %6, 0i
+  STORE_TVALUE R4, %8, 0i, %7
+  CHECK_TAG R4, tnumber, exit(1)
+  %14 = LOAD_DOUBLE R4
+  %16 = MUL_NUM %14, R0
+  %29 = MUL_NUM %14, R1
+  %38 = ADD_NUM %16, %29
+  STORE_DOUBLE R2, %38
+  STORE_TAG R2, tnumber
+  INTERRUPT 5u
+  RETURN R2, 1i
+; function setm($arg0) line 8
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  %1 = LOAD_TAG R0
+  SET_UPVALUE U0, %0, %1, R0
+  INTERRUPT 1u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -7103,7 +8494,34 @@ local function foo(a: number, b: number)
     return m + a
 end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 4
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  %10 = LOAD_DOUBLE R0
+  %11 = LOAD_DOUBLE R1
+  %12 = SUB_NUM %10, %11
+  STORE_DOUBLE R2, %12
+  STORE_TAG R2, tnumber
+  %15 = LOAD_TVALUE R2, 0i, tnumber
+  SET_UPVALUE U0, %15, tnumber
+  %28 = MUL_NUM %12, %10
+  %41 = MUL_NUM %12, %11
+  %50 = ADD_NUM %28, %41
+  STORE_DOUBLE R2, %50
+  %53 = LOAD_TVALUE R2, 0i, tnumber
+  SET_UPVALUE U0, %53, tnumber
+  %66 = ADD_NUM %50, %10
+  STORE_DOUBLE R2, %66
+  INTERRUPT 10u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -7149,7 +8567,40 @@ end
 
 function setm(x, y) m = x end
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo() line 4
+bb_bytecode_0:
+  %0 = GET_UPVALUE_ADDR U0
+  %1 = LOAD_TAG %0, 0i
+  %2 = LOAD_TVALUE %0, 0i
+  STORE_TVALUE R0, %2, 0i, %1
+  %5 = LOAD_TAG R0
+  SET_UPVALUE U0, %2, %5, R0
+  %7 = GET_UPVALUE_ADDR U0
+  %8 = LOAD_TAG %7, 0i
+  STORE_TVALUE R1, %2, 0i, %8
+  %12 = LOAD_TAG R1
+  SET_UPVALUE U0, %2, %12, R1
+  %14 = GET_UPVALUE_ADDR U0
+  %15 = LOAD_TAG %14, 0i
+  STORE_TVALUE R4, %2, 0i, %15
+  CHECK_TAG R4, tnumber, exit(5)
+  %22 = LOAD_DOUBLE R4
+  %24 = ADD_NUM %22, %22
+  %33 = ADD_NUM %24, %22
+  STORE_DOUBLE R2, %33
+  STORE_TAG R2, tnumber
+  INTERRUPT 7u
+  RETURN R2, 1i
+; function setm($arg0, $arg1) line 12
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  %1 = LOAD_TAG R0
+  SET_UPVALUE U0, %0, %1, R0
+  INTERRUPT 1u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function foo() line 4
 bb_bytecode_0:
   %0 = GET_UPVALUE U0
@@ -7192,7 +8643,129 @@ end
 
 arr = {1, 2, 3, 4}
 )"),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0) line 4
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R3, 1
+  STORE_TAG R3, tnumber
+  %6 = GET_UPVALUE_ADDR U0
+  %7 = LOAD_TAG %6, 0i
+  %8 = LOAD_TVALUE %6, 0i
+  STORE_TVALUE R4, %8, 0i, %7
+  CHECK_TAG R4, ttable, exit(2)
+  %12 = LOAD_POINTER R4
+  CHECK_NO_METATABLE %12, bb_fallback_5
+  %14 = TABLE_LEN %12
+  %15 = INT_TO_NUM %14
+  STORE_DOUBLE R1, %15
+  STORE_TAG R1, tnumber
+  JUMP bb_6
+bb_6:
+  STORE_DOUBLE R2, 1
+  STORE_TAG R2, tnumber
+  %28 = LOAD_DOUBLE R1
+  JUMP_CMP_NUM R3, %28, not_le, bb_bytecode_3, bb_bytecode_2
+bb_bytecode_2:
+  INTERRUPT 5u
+  %32 = GET_UPVALUE_ADDR U0
+  %33 = LOAD_TAG %32, 0i
+  %34 = LOAD_TVALUE %32, 0i
+  STORE_TVALUE R4, %34, 0i, %33
+  %36 = GET_UPVALUE_ADDR U0
+  %37 = LOAD_TAG %36, 0i
+  STORE_TVALUE R7, %34, 0i, %37
+  CHECK_TAG R7, ttable, exit(7)
+  %44 = LOAD_POINTER R7
+  %45 = LOAD_DOUBLE R3
+  %46 = TRY_NUM_TO_INDEX %45, bb_fallback_7
+  %47 = SUB_INT %46, 1i
+  CHECK_ARRAY_SIZE %44, %47, bb_fallback_7
+  CHECK_NO_METATABLE %44, bb_fallback_7
+  %50 = GET_ARR_ADDR %44, %47
+  %51 = LOAD_TAG %50, 0i
+  %52 = LOAD_TVALUE %50, 0i
+  STORE_TVALUE R6, %52, 0i, %51
+  JUMP bb_linear_17
+bb_linear_17:
+  %148 = LOAD_TAG %50, 0i
+  STORE_TVALUE R8, %52, 0i, %148
+  CHECK_TAG R8, tnumber, bb_fallback_11
+  %154 = LOAD_DOUBLE R8
+  %156 = MUL_NUM %154, R0
+  %166 = ADD_NUM %154, %156
+  STORE_DOUBLE R5, %166
+  STORE_TAG R5, tnumber
+  CHECK_READONLY %44, bb_fallback_15
+  STORE_SPLIT_TVALUE %50, tnumber, %166, 0i
+  CHECK_GC
+  %186 = LOAD_DOUBLE R1
+  %188 = ADD_NUM %45, 1
+  STORE_DOUBLE R3, %188
+  JUMP_CMP_NUM %188, %186, le, bb_bytecode_2, bb_bytecode_3
+bb_8:
+  %58 = GET_UPVALUE_ADDR U0
+  %59 = LOAD_TAG %58, 0i
+  %60 = LOAD_TVALUE %58, 0i
+  STORE_TVALUE R9, %60, 0i, %59
+  CHECK_TAG R9, ttable, exit(9)
+  %66 = LOAD_POINTER R9
+  %67 = LOAD_DOUBLE R3
+  %68 = TRY_NUM_TO_INDEX %67, bb_fallback_9
+  %69 = SUB_INT %68, 1i
+  CHECK_ARRAY_SIZE %66, %69, bb_fallback_9
+  CHECK_NO_METATABLE %66, bb_fallback_9
+  %72 = GET_ARR_ADDR %66, %69
+  %73 = LOAD_TAG %72, 0i
+  %74 = LOAD_TVALUE %72, 0i
+  STORE_TVALUE R8, %74, 0i, %73
+  JUMP bb_10
+bb_10:
+  CHECK_TAG R8, tnumber, bb_fallback_11
+  %84 = LOAD_DOUBLE R8
+  %86 = MUL_NUM %84, R0
+  STORE_DOUBLE R7, %86
+  STORE_TAG R7, tnumber
+  JUMP bb_12
+bb_12:
+  CHECK_TAG R6, tnumber, bb_fallback_13
+  CHECK_TAG R7, tnumber, bb_fallback_13
+  %97 = LOAD_DOUBLE R6
+  %99 = ADD_NUM %97, R7
+  STORE_DOUBLE R5, %99
+  STORE_TAG R5, tnumber
+  JUMP bb_14
+bb_14:
+  CHECK_TAG R4, ttable, exit(12)
+  %110 = LOAD_POINTER R4
+  %111 = LOAD_DOUBLE R3
+  %112 = TRY_NUM_TO_INDEX %111, bb_fallback_15
+  %113 = SUB_INT %112, 1i
+  CHECK_ARRAY_SIZE %110, %113, bb_fallback_15
+  CHECK_NO_METATABLE %110, bb_fallback_15
+  CHECK_READONLY %110, bb_fallback_15
+  %117 = GET_ARR_ADDR %110, %113
+  %118 = LOAD_TAG R5, 0i
+  %119 = LOAD_TVALUE R5, 0i
+  STORE_TVALUE %117, %119, 0i, %118
+  BARRIER_TABLE_FORWARD %110, R5, undef
+  JUMP bb_16
+bb_16:
+  CHECK_GC
+  %127 = LOAD_DOUBLE R1
+  %128 = LOAD_DOUBLE R3
+  %129 = ADD_NUM %128, 1
+  STORE_DOUBLE R3, %129
+  JUMP_CMP_NUM %129, %127, le, bb_bytecode_2, bb_bytecode_3
+bb_bytecode_3:
+  INTERRUPT 14u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function foo($arg0) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -7616,7 +9189,51 @@ local function foo(n: number)
 end
 )"
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0) line 2
+bb_0:
+; in regs: R0
+; out regs: R0
+  CHECK_TAG R0, tnumber, exit(entry)
+  JUMP bb_4
+bb_4:
+; in regs: R0
+; out regs: R0
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+; in regs: R0
+; out regs: R1, R2, R3, R4
+  STORE_DOUBLE R1, 0
+  STORE_TAG R1, tnumber
+  STORE_DOUBLE R4, 1
+  STORE_TAG R4, tnumber
+  %9 = LOAD_TVALUE R0, 0i, tnumber
+  STORE_TVALUE R2, %9, 0i, tnumber
+  STORE_DOUBLE R3, 1
+  STORE_TAG R3, tnumber
+  %17 = LOAD_DOUBLE R0
+  JUMP_CMP_NUM 1, %17, not_le, bb_bytecode_3, bb_bytecode_2
+bb_bytecode_2:
+; in regs: R1, R2, R3, R4
+; out regs: R1, R2, R3, R4
+  INTERRUPT 5u
+  CHECK_TAG R1, tnumber, exit(5)
+  CHECK_TAG R4, tnumber, exit(5)
+  %25 = LOAD_DOUBLE R1
+  %26 = LOAD_DOUBLE R4
+  %27 = ADD_NUM %25, %26
+  STORE_DOUBLE R1, %27
+  CHECK_GC
+  %30 = LOAD_DOUBLE R2
+  %32 = ADD_NUM %26, 1
+  STORE_DOUBLE R4, %32
+  JUMP_CMP_NUM %32, %30, le, bb_bytecode_2, bb_bytecode_3
+bb_bytecode_3:
+; in regs: R1
+  INTERRUPT 7u
+  RETURN R1, 1i
+)T24"
+                             : R"(
 ; function foo($arg0) line 2
 bb_0:
 ; in regs: R0
@@ -7680,7 +9297,64 @@ local function foo(n: number, t: {number})
 end
 )"
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1) line 2
+bb_0:
+  CHECK_TAG R0, tnumber, exit(entry)
+  CHECK_TAG R1, ttable, exit(entry)
+  JUMP bb_4
+bb_4:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R2, 0
+  STORE_TAG R2, tnumber
+  STORE_DOUBLE R5, 1
+  STORE_TAG R5, tnumber
+  %12 = LOAD_POINTER R1
+  CHECK_NO_METATABLE %12, bb_fallback_5
+  %14 = TABLE_LEN %12
+  %15 = INT_TO_NUM %14
+  STORE_DOUBLE R3, %15
+  STORE_TAG R3, tnumber
+  JUMP bb_6
+bb_6:
+  STORE_DOUBLE R4, 1
+  STORE_TAG R4, tnumber
+  %28 = LOAD_DOUBLE R3
+  JUMP_CMP_NUM R5, %28, not_le, bb_bytecode_3, bb_bytecode_2
+bb_bytecode_2:
+  INTERRUPT 5u
+  CHECK_TAG R5, tnumber, exit(5)
+  %36 = LOAD_POINTER R1
+  %37 = LOAD_DOUBLE R5
+  %38 = TRY_NUM_TO_INDEX %37, bb_fallback_7
+  %39 = SUB_INT %38, 1i
+  CHECK_ARRAY_SIZE %36, %39, bb_fallback_7
+  CHECK_NO_METATABLE %36, bb_fallback_7
+  %42 = GET_ARR_ADDR %36, %39
+  %43 = LOAD_TAG %42, 0i
+  %44 = LOAD_TVALUE %42, 0i
+  STORE_TVALUE R6, %44, 0i, %43
+  JUMP bb_8
+bb_8:
+  CHECK_TAG R2, tnumber, exit(6)
+  CHECK_TAG R6, tnumber, bb_fallback_9
+  %54 = LOAD_DOUBLE R2
+  %56 = ADD_NUM %54, R6
+  STORE_DOUBLE R2, %56
+  JUMP bb_10
+bb_10:
+  CHECK_GC
+  %63 = LOAD_DOUBLE R3
+  %64 = LOAD_DOUBLE R5
+  %65 = ADD_NUM %64, 1
+  STORE_DOUBLE R5, %65
+  JUMP_CMP_NUM %65, %63, le, bb_bytecode_2, bb_bytecode_3
+bb_bytecode_3:
+  INTERRUPT 8u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -7910,7 +9584,7 @@ local function foo(c: vector, d: vector): vector
 end
 )"
                ),
-        R"(
+        std::string(R"(
 ; function foo($arg0, $arg1) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
@@ -7930,9 +9604,14 @@ bb_bytecode_1:
   %24 = LOAD_TVALUE R1, 0i, tvector
   %25 = ADD_VEC %16, %24
   %26 = TAG_VECTOR %25
-  STORE_TVALUE R3, %26
+)") +
+            (LUA_VECTOR_SIZE == 4 ? R"(  STORE_TVALUE R3, %26, 0i, tvector
+  STORE_TVALUE R4, %26, 0i, tvector
+)"
+                                  : R"(  STORE_TVALUE R3, %26
   STORE_TVALUE R4, %26
-  SETLIST 6u, R2, R3, 2i, 1u, 2u
+)") +
+            R"(  SETLIST 6u, R2, R3, 2i, 1u, 2u
   INTERRUPT 8u
   RETURN R2, 1i
 )"
@@ -7955,7 +9634,43 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1) line 2
+; R0: table [argument]
+; R1: string [argument]
+bb_0:
+  CHECK_TAG R0, ttable, exit(entry)
+  CHECK_TAG R1, tstring, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  STORE_DOUBLE R2, 2
+  STORE_TAG R2, tnumber
+  %10 = LOAD_POINTER R0
+  %11 = GET_SLOT_NODE_ADDR %10, 1u, K0 ('x')
+  CHECK_SLOT_MATCH %11, K0 ('x'), bb_fallback_3
+  CHECK_READONLY %10, bb_fallback_3
+  STORE_SPLIT_TVALUE %11, tnumber, 2, 0i
+  JUMP bb_linear_9
+bb_linear_9:
+  STORE_DOUBLE R2, 4
+  SET_SAVEDPC 5u
+  SET_TABLE R2, R0, R1
+  %52 = LOAD_POINTER R0
+  %53 = GET_SLOT_NODE_ADDR %52, 5u, K0 ('x')
+  CHECK_SLOT_MATCH %53, K0 ('x'), bb_fallback_5
+  %55 = LOAD_TAG %53, 0i
+  %56 = LOAD_TVALUE %53, 0i
+  STORE_TVALUE R3, %56, 0i, %55
+  CHECK_TAG R3, tnumber, bb_fallback_7
+  %61 = LOAD_DOUBLE R3
+  %62 = ADD_NUM %61, %61
+  STORE_DOUBLE R2, %62
+  INTERRUPT 8u
+  RETURN R2, 1i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1) line 2
 ; R0: table [argument]
 ; R1: string [argument]
@@ -8011,7 +9726,138 @@ end
                    2,
                    true
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function test($arg0, $arg1, $arg2) line 2
+; R1: table [argument]
+; R2: number [argument]
+; R4: string from 10 to 11
+; R6: string from 17 to 18
+; R8: string from 8 to 9
+bb_0:
+  CHECK_TAG R1, ttable, exit(entry)
+  CHECK_TAG R2, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %8 = LOAD_POINTER R0
+  %9 = GET_SLOT_NODE_ADDR %8, 0u, K0 ('map')
+  CHECK_SLOT_MATCH %9, K0 ('map'), bb_fallback_3
+  %11 = LOAD_TAG %9, 0i
+  %12 = LOAD_TVALUE %9, 0i
+  STORE_TVALUE R3, %12, 0i, %11
+  JUMP bb_linear_19
+bb_linear_19:
+  %107 = LOAD_POINTER R1
+  %108 = GET_SLOT_NODE_ADDR %107, 2u, K1 ('id')
+  CHECK_SLOT_MATCH %108, K1 ('id'), bb_fallback_5
+  %110 = LOAD_TAG %108, 0i
+  %111 = LOAD_TVALUE %108, 0i
+  STORE_TVALUE R4, %111, 0i, %110
+  %119 = LOAD_TAG %9, 0i
+  STORE_TVALUE R7, %12, 0i, %119
+  %126 = LOAD_TAG %108, 0i
+  STORE_TVALUE R8, %111, 0i, %126
+  SET_SAVEDPC 9u
+  GET_TABLE R6, R7, R8
+  CHECK_TAG R6, tnumber, bb_fallback_11
+  %134 = LOAD_DOUBLE R6
+  %136 = ADD_NUM %134, R2
+  STORE_DOUBLE R5, %136
+  STORE_TAG R5, tnumber
+  SET_SAVEDPC 11u
+  SET_TABLE R5, R3, R4
+  %144 = LOAD_POINTER R0
+  %145 = GET_SLOT_NODE_ADDR %144, 11u, K2 ('foo')
+  CHECK_SLOT_MATCH %145, K2 ('foo'), bb_fallback_13
+  %147 = LOAD_TAG %145, 0i
+  %148 = LOAD_TVALUE %145, 0i
+  STORE_TVALUE R3, %148, 0i, %147
+  %154 = GET_SLOT_NODE_ADDR %144, 13u, K0 ('map')
+  CHECK_SLOT_MATCH %154, K0 ('map'), bb_fallback_15
+  %156 = LOAD_TAG %154, 0i
+  %157 = LOAD_TVALUE %154, 0i
+  STORE_TVALUE R5, %157, 0i, %156
+  %160 = LOAD_POINTER R1
+  %161 = GET_SLOT_NODE_ADDR %160, 15u, K1 ('id')
+  CHECK_SLOT_MATCH %161, K1 ('id'), bb_fallback_17
+  %163 = LOAD_TAG %161, 0i
+  %164 = LOAD_TVALUE %161, 0i
+  STORE_TVALUE R6, %164, 0i, %163
+  JUMP bb_18
+bb_4:
+  %19 = LOAD_POINTER R1
+  %20 = GET_SLOT_NODE_ADDR %19, 2u, K1 ('id')
+  CHECK_SLOT_MATCH %20, K1 ('id'), bb_fallback_5
+  %22 = LOAD_TAG %20, 0i
+  %23 = LOAD_TVALUE %20, 0i
+  STORE_TVALUE R4, %23, 0i, %22
+  JUMP bb_6
+bb_6:
+  CHECK_TAG R0, ttable, bb_fallback_7
+  %30 = LOAD_POINTER R0
+  %31 = GET_SLOT_NODE_ADDR %30, 4u, K0 ('map')
+  CHECK_SLOT_MATCH %31, K0 ('map'), bb_fallback_7
+  %33 = LOAD_TAG %31, 0i
+  %34 = LOAD_TVALUE %31, 0i
+  STORE_TVALUE R7, %34, 0i, %33
+  JUMP bb_8
+bb_8:
+  %41 = LOAD_POINTER R1
+  %42 = GET_SLOT_NODE_ADDR %41, 6u, K1 ('id')
+  CHECK_SLOT_MATCH %42, K1 ('id'), bb_fallback_9
+  %44 = LOAD_TAG %42, 0i
+  %45 = LOAD_TVALUE %42, 0i
+  STORE_TVALUE R8, %45, 0i, %44
+  JUMP bb_10
+bb_10:
+  SET_SAVEDPC 9u
+  GET_TABLE R6, R7, R8
+  CHECK_TAG R6, tnumber, bb_fallback_11
+  %56 = LOAD_DOUBLE R6
+  %58 = ADD_NUM %56, R2
+  STORE_DOUBLE R5, %58
+  STORE_TAG R5, tnumber
+  JUMP bb_12
+bb_12:
+  SET_SAVEDPC 11u
+  SET_TABLE R5, R3, R4
+  CHECK_TAG R0, ttable, bb_fallback_13
+  %69 = LOAD_POINTER R0
+  %70 = GET_SLOT_NODE_ADDR %69, 11u, K2 ('foo')
+  CHECK_SLOT_MATCH %70, K2 ('foo'), bb_fallback_13
+  %72 = LOAD_TAG %70, 0i
+  %73 = LOAD_TVALUE %70, 0i
+  STORE_TVALUE R3, %73, 0i, %72
+  JUMP bb_14
+bb_14:
+  CHECK_TAG R0, ttable, bb_fallback_15
+  %80 = LOAD_POINTER R0
+  %81 = GET_SLOT_NODE_ADDR %80, 13u, K0 ('map')
+  CHECK_SLOT_MATCH %81, K0 ('map'), bb_fallback_15
+  %83 = LOAD_TAG %81, 0i
+  %84 = LOAD_TVALUE %81, 0i
+  STORE_TVALUE R5, %84, 0i, %83
+  JUMP bb_16
+bb_16:
+  %91 = LOAD_POINTER R1
+  %92 = GET_SLOT_NODE_ADDR %91, 15u, K1 ('id')
+  CHECK_SLOT_MATCH %92, K1 ('id'), bb_fallback_17
+  %94 = LOAD_TAG %92, 0i
+  %95 = LOAD_TVALUE %92, 0i
+  STORE_TVALUE R6, %95, 0i, %94
+  JUMP bb_18
+bb_18:
+  SET_SAVEDPC 18u
+  GET_TABLE R4, R5, R6
+  INTERRUPT 18u
+  SET_SAVEDPC 20u
+  CALL R3, 1i, 0i
+  INTERRUPT 20u
+  RETURN R0, 0i
+)T24"
+                             : R"(
 ; function test($arg0, $arg1, $arg2) line 2
 ; R1: table [argument]
 ; R2: number [argument]
@@ -8498,7 +10344,40 @@ end
                    1,
                    2
                ),
-        R"(
+        LUA_VECTOR_SIZE == 4 ? R"T24(
+; function foo($arg0, $arg1, $arg2) line 2
+; R0: buffer [argument]
+; R1: number [argument]
+bb_0:
+  CHECK_TAG R0, tbuffer, exit(entry)
+  CHECK_TAG R1, tnumber, exit(entry)
+  JUMP bb_2
+bb_2:
+  JUMP bb_bytecode_1
+bb_bytecode_1:
+  implicit CHECK_SAFE_ENV exit(0)
+  %7 = LOAD_TVALUE R0, 0i, tbuffer
+  STORE_TVALUE R4, %7, 0i, tbuffer
+  %10 = LOAD_TVALUE R1, 0i, tnumber
+  STORE_TVALUE R5, %10, 0i, tnumber
+  %12 = LOAD_TAG R2, 0i
+  %13 = LOAD_TVALUE R2, 0i
+  STORE_TVALUE R6, %13, 0i, %12
+  STORE_DOUBLE R7, 0
+  STORE_TAG R7, tnumber
+  CHECK_TAG %12, tnumber, exit(5)
+  %24 = LOAD_POINTER R0
+  %25 = LOAD_DOUBLE R1
+  %26 = NUM_TO_INT %25
+  CHECK_BUFFER_LEN %24, %26, 0i, 4i, undef, exit(5)
+  %28 = LOAD_DOUBLE R2
+  %29 = NUM_TO_UINT %28
+  BUFFER_WRITEI32 %24, %26, %29, tbuffer
+  ADJUST_STACK_TO_REG R3, 0i
+  INTERRUPT 8u
+  RETURN R3, -1i
+)T24"
+                             : R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 ; R0: buffer [argument]
 ; R1: number [argument]

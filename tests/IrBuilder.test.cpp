@@ -12,6 +12,12 @@
 
 #include <limits.h>
 
+#if LUA_VECTOR_SIZE == 4
+static constexpr bool kVectorSize4 = true;
+#else
+static constexpr bool kVectorSize4 = false;
+#endif
+
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuauIntegerType2)
@@ -130,6 +136,66 @@ public:
 };
 
 TEST_SUITE_BEGIN("Optimization");
+
+TEST_CASE_FIXTURE(IrBuilderFixture, "UpvalueSourceStoreDependsOnCollectability")
+{
+    int type = tnumber;
+    bool inferTag = false;
+    bool needsBarrier = false;
+
+    SUBCASE("Number")
+    {
+        type = tnumber;
+    }
+    SUBCASE("InferredNumber")
+    {
+        inferTag = true;
+    }
+    SUBCASE("Unknown")
+    {
+        type = -1;
+        needsBarrier = true;
+    }
+    SUBCASE("Table")
+    {
+        type = ttable;
+        needsBarrier = true;
+    }
+    SUBCASE("Vector")
+    {
+        type = tvector;
+#if LUA_VECTOR_DOUBLE == 1
+        needsBarrier = true;
+#endif
+    }
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+
+    IrOp tag = type == -1 ? build.inst(IrCmd::LOAD_TAG, build.vmReg(0)) : build.constTag(type);
+    if (inferTag)
+    {
+        tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(0));
+        build.inst(IrCmd::CHECK_TAG, tag, build.constTag(type), build.vmExit(0));
+    }
+    IrOp value = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
+    IrOp store = build.inst(IrCmd::STORE_TVALUE, build.vmReg(1), value, build.constInt(0), tag);
+    IrOp upvalue = build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), value, tag, build.vmReg(1));
+    IrOp nextValue = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2));
+    IrOp nextTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(2));
+    IrOp nextStore = build.inst(IrCmd::STORE_TVALUE, build.vmReg(1), nextValue, build.constInt(0), nextTag);
+    build.inst(IrCmd::RETURN, build.vmReg(1), build.constInt(1));
+
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+    markDeadStoresInBlockChains(build);
+
+    CHECK(OP_C(build.function.instOp(upvalue)) == (inferTag ? build.constTag(type) : tag));
+    // Unknown and collectable tags keep R1 live for the barrier's reload.
+    CHECK(OPT_OP_D(build.function.instOp(upvalue)) == (needsBarrier ? build.vmReg(1) : IrOp{}));
+    CHECK(build.function.instOp(store).cmd == (needsBarrier ? IrCmd::STORE_TVALUE : IrCmd::NOP));
+    CHECK(build.function.instOp(nextStore).cmd == IrCmd::STORE_TVALUE);
+}
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "FinalX64OptCheckTag")
 {
@@ -7927,11 +7993,13 @@ bb_0:
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverVector")
 {
     IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp firstW = kVectorSize4 ? build.constDouble(8.0) : IrOp{};
+    IrOp lastW = kVectorSize4 ? build.constDouble(16.0) : IrOp{};
 
     build.beginBlock(entry);
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0));
+    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0), IrOp{}, firstW);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0), IrOp{}, lastW);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7939,12 +8007,17 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverVector")
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK_EQ(
+        "\n" + toString(build.function, IncludeUseInfo::No),
+        std::string(R"(
 bb_0:
-   STORE_VECTOR R0, 1, 2, 4, tvector
+   STORE_VECTOR R0, 1, 2, 4, tvector)") +
+            (kVectorSize4 ? ", 16" : "") +
+            R"(
    RETURN R0, 1i
 
-)");
+)"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverVector")
@@ -8042,13 +8115,15 @@ bb_0:
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedVector")
 {
     IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp firstW = kVectorSize4 ? build.constDouble(8.0) : IrOp{};
+    IrOp lastW = kVectorSize4 ? build.constDouble(64.0) : IrOp{};
 
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0), IrOp{}, firstW);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
+    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0), IrOp{}, lastW);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -8056,12 +8131,17 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedVector")
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK_EQ(
+        "\n" + toString(build.function, IncludeUseInfo::No),
+        std::string(R"(
 bb_0:
-   STORE_VECTOR R0, 8, 16, 32, tvector
+   STORE_VECTOR R0, 8, 16, 32, tvector)") +
+            (kVectorSize4 ? ", 64" : "") +
+            R"(
    RETURN R0, 1i
 
-)");
+)"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedNumber")
