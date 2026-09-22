@@ -109,6 +109,13 @@ assert(vector.create(1, 2, 2).Magnitude == 3)
 assert(vector.create(0, 0, 0)['Dot'](vector.create(1, 2, 4), vector.create(5, 6, 7)) == 45)
 assert(vector.create(2, 0, 0).Unit == vector.create(1, 0, 0))
 
+if vector_size == 4 then
+	assert(vector.create(1, 2, 2, 4).Magnitude == 5)
+	assert(vector.create(0, 0, 0, 2).Unit == vector.create(0, 0, 0, 1))
+	-- The custom Dot callback uses XYZ, independently of the vector library.
+	assert(vector.create(1, 2, 4, 8):Dot(vector.create(5, 6, 7, 9)) == 45)
+end
+
 -- __namecall
 assert(vector.create(1, 2, 4):Dot(vector.create(5, 6, 7)) == 45)
 assert(ecall(function() vector.create(1, 2, 4):Dot() end) == "missing argument #2 (vector expected)")

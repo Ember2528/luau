@@ -4609,6 +4609,66 @@ TEST_CASE("Native")
     );
 }
 
+#if LUA_VECTOR_SIZE == 4
+TEST_CASE("NativeVector4")
+{
+#if defined(CODEGEN_TARGET_X64) || defined(CODEGEN_TARGET_A64)
+    if (codegen)
+        REQUIRE(luau_codegen_supported());
+#endif
+    runConformance("native_vector4.luau", setupNativeHelpers);
+}
+#endif
+
+TEST_CASE("NativeLargeFrameCopies")
+{
+    // Keep 180 live values in the frame and in a closure. With 24-byte TValues
+    // this crosses A64's immediate and unaligned SIMD addressing limits.
+    std::string source = "local function exercise(...)\nassert(is_native_if_supported())\nlocal ";
+    for (int i = 0; i < 180; ++i)
+        source += (i ? ", r" : "r") + std::to_string(i);
+    source += " = ...\nlocal captured = r179\nlocal function exchange(v)\n"
+              "assert(is_native_if_supported())\nlocal old = captured; captured = v; return old\nend\n"
+              "local t = {r179, nil, r178}; t.value = exchange(r178)\n"
+              "assert(t[1] == r179 and t.value == r179 and exchange(r179) == r178)\n"
+              "local count = 0\nfor k, v, extra in t do assert(v == t[k] and extra == nil); count += 1 end\n"
+              "assert(count == 3)\n"
+              "local function copy()\nassert(is_native_if_supported())\nreturn ";
+    for (int i = 0; i < 180; ++i)
+        source += (i ? ", r" : "r") + std::to_string(i);
+    source += "\nend\nreturn copy()\nend\nlocal values = {}\n"
+              "for i = 1, 180 do values[i] = i % 2 == 0 and vector.create(i, -i, 1, i + 1) or {i} end\n"
+              "local result = {exercise(unpack(values))}\n"
+              "for i = 1, 180 do assert(result[i] == values[i]) end\nreturn true";
+
+    StateRef state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    luaL_openlibs(L);
+    setupNativeHelpers(L);
+    luaL_sandbox(L);
+    luaL_sandboxthread(L);
+
+    if (codegen && luau_codegen_supported())
+        luau_codegen_create(L);
+
+    lua_CompileOptions opts = defaultOptions();
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source.data(), source.size(), &opts, &bytecodeSize);
+    int result = luau_load(L, "=LargeFrameCopies", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(result == 0);
+
+    if (codegen && luau_codegen_supported())
+    {
+        auto nativeResult = Luau::CodeGen::compile(L, -1, Luau::CodeGen::CompilationOptions{Luau::CodeGen::CodeGen_ColdFunctions});
+        REQUIRE(!nativeResult.hasErrors());
+    }
+    result = lua_pcall(L, 0, 1, 0);
+    INFO((result ? lua_tostring(L, -1) : "success"));
+    REQUIRE(result == 0);
+    CHECK(lua_toboolean(L, -1));
+}
+
 TEST_CASE("NativeIntegerSpills")
 {
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
