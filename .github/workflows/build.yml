@@ -108,10 +108,16 @@ jobs:
             codegen: true
           - name: Vector4
             flags: "-DLUA_VECTOR_SIZE=4"
-            codegen: false
+            codegen: true
           - name: VectorDouble
             flags: "-DLUA_VECTOR_DOUBLE=1"
-            codegen: false
+            codegen: true
+          - name: Vector4Double
+            flags: "-DLUA_VECTOR_SIZE=4 -DLUA_VECTOR_DOUBLE=1"
+            codegen: true
+          - name: Vector4LongJmp
+            flags: "-DLUA_VECTOR_SIZE=4 -DLUA_USE_LONGJMP=1"
+            codegen: true
     name: run extra configuration (${{matrix.config.name}})
     runs-on: ubuntu-latest
     steps:
@@ -131,6 +137,45 @@ jobs:
       run: |
         build/Luau.Conformance --codegen --fflags=true
         build/Luau.Conformance --codegen -O2 --fflags=true
+
+  vector4:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-14, windows-latest]
+        arch: [host]
+        include:
+          - os: windows-latest
+            arch: Win32
+            cmakeArguments: "-A Win32"
+    name: vector4 on ${{matrix.os}} (${{matrix.arch}})
+    runs-on: ${{matrix.os}}
+    steps:
+    - uses: actions/checkout@v4
+    - name: configure
+      run: cmake . -B build ${{matrix.cmakeArguments}} -DCMAKE_BUILD_TYPE=Debug -DLUAU_WERROR=ON -DLUAU_VECTOR_FOUR_WIDE=ON
+    - name: build
+      run: cmake --build build --target Luau.UnitTest Luau.Conformance --config Debug -j2
+    - name: test
+      shell: bash
+      run: |
+        testdir=build
+        if [[ "${{runner.os}}" == "Windows" ]]; then testdir=build/Debug; fi
+        "$testdir/Luau.UnitTest"
+        "$testdir/Luau.UnitTest" --fflags=true
+        "$testdir/Luau.Conformance"
+        "$testdir/Luau.Conformance" --fflags=true
+        if [[ "${{matrix.arch}}" == "Win32" ]]; then exit 0; fi
+        "$testdir/Luau.Conformance" --codegen -O2
+        "$testdir/Luau.Conformance" --codegen -O2 --fflags=true
+        if [[ "${{matrix.os}}" == "ubuntu-latest" ]]; then
+          for opt in 0 1; do
+            "$testdir/Luau.Conformance" --codegen -O$opt
+            "$testdir/Luau.Conformance" --codegen -O$opt --fflags=true
+          done
+        fi
+        if [[ "${{runner.os}}" == "Linux" ]]; then
+          "$testdir/Luau.Conformance" --codegen -O2 --fflags=true,DebugCodegenChaosA64=true,DebugCodegenLimitRegs=true
+        fi
 
   coverage:
     runs-on: ubuntu-22.04
