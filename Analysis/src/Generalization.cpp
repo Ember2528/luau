@@ -1093,7 +1093,7 @@ struct FindTypesWithPolarity
             push(ft->lowerBound, polarity, isWithinFunction);
             push(ft->upperBound, polarity, isWithinFunction);
         }
-        else if (auto genTy = get<GenericType>(ty))
+        else if (get<GenericType>(ty))
         {
             GeneralizationParams<TypeId>& params = types[ty];
             params.useCount++;
@@ -1213,7 +1213,7 @@ struct FindTypesWithPolarity
             for (auto packArg : tfit->packArguments)
                 push(packArg, polarity, isWithinFunction);
         }
-        else if (auto gtp = get<GenericTypePack>(tp))
+        else if (get<GenericTypePack>(tp))
         {
             GeneralizationParams<TypePackId>& params = typePacks[tp];
             params.useCount++;
