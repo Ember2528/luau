@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'T24-native-codegen'
     paths-ignore:
       - 'docs/**'
       - 'papers/**'
@@ -19,6 +20,7 @@ on:
 jobs:
   unix:
     strategy:
+      fail-fast: false
       matrix:
         os: [{name: ubuntu, version: ubuntu-latest}, {name: macos, version: macos-latest}, {name: macos-arm, version: macos-14}]
         compiler:
@@ -64,6 +66,7 @@ jobs:
   windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         arch: [Win32, x64]
     steps:
@@ -101,6 +104,7 @@ jobs:
 
   configurations:
     strategy:
+      fail-fast: false
       matrix:
         config:
           - name: LongJmp
@@ -140,6 +144,7 @@ jobs:
 
   vector4:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-14, windows-latest]
         arch: [host]
