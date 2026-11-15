@@ -708,6 +708,35 @@ using TKeyRef = const TKey*;
 #define luauNodeKeyType(n) ((n)->key.tt)
 #endif
 
+// The compact-cache trial appends a uint32_t per hash slot to the SAME node
+// allocation. Nodes remain40 bytes and table headers remain48 bytes; backing
+// is44 bytes/slot when enabled. This plane is key-owned and never overlaps
+// any semantic value, key payload, or packed key tag/chain bits.
+#if defined(LUAU_T24_COMPACT_VECTOR_CACHE_RESEARCH)
+#if !defined(LUAU_T24_PACKED_NODE) || !LUAU_T24_NUMERIC_KEY_HASH
+#error "Compact vector cache requires packed nodes and numeric/query hashes"
+#endif
+#define LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE 1
+#else
+#define LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE 0
+#endif
+inline constexpr size_t luauNodeStorageBytes(size_t count)
+{
+    return count * (sizeof(LuaNode) + (LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE ? sizeof(uint32_t) : 0));
+}
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+constexpr uint32_t kCompactVectorHashMarker = 0x80000000u;
+constexpr uint32_t kCompactVectorHashMask = 0x7fffffffu;
+inline uint32_t* luauCompactNodeCache(LuaNode* node, size_t count)
+{
+    return reinterpret_cast<uint32_t*>(node + count);
+}
+inline const uint32_t* luauCompactNodeCache(const LuaNode* node, size_t count)
+{
+    return reinterpret_cast<const uint32_t*>(node + count);
+}
+#endif
+
 // copy a value into a key
 #if defined(LUAU_T24_PACKED_NODE)
 #define setnodekey(L, node, obj) \

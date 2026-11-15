@@ -372,7 +372,7 @@ static void dumpstring(FILE* f, TString* ts)
 
 static void dumptable(FILE* f, LuaTable* h)
 {
-    size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : sizenode(h) * sizeof(LuaNode)) + h->sizearray * sizeof(TValue);
+    size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : luauNodeStorageBytes(sizenode(h))) + h->sizearray * sizeof(TValue);
 
     if (hasmetacache(h))
         size += TM_N * sizeof(TValue);
@@ -802,7 +802,7 @@ static void enumstring(EnumContext* ctx, TString* ts)
 
 static void enumtable(EnumContext* ctx, LuaTable* h)
 {
-    size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : sizenode(h) * sizeof(LuaNode)) + h->sizearray * sizeof(TValue);
+    size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : luauNodeStorageBytes(sizenode(h))) + h->sizearray * sizeof(TValue);
 
     if (hasmetacache(h))
         size += TM_N * sizeof(TValue);
