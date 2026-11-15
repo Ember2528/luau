@@ -423,6 +423,10 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     regs.takeReg(table, kInvalidInstIdx); // table/index are preloaded above, have to take ownership so the wrapper can free them
     regs.takeReg(index, kInvalidInstIdx);
 
+#if defined(LUAU_T24_DENSE_ADMISSION_RESEARCH)
+    Label nodeDone, emptyNode;
+#endif
+
 #if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
     // Capture exactly the existing three scratch registers at the branch
     // point. The no-call handler is emitted after the helper block, keeping
@@ -458,7 +462,13 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         build.mov(dwordReg(node.reg), 1);
         build.shl(dwordReg(node.reg), byteReg(shift.reg));
         build.cmp(dwordReg(offset.reg), dwordReg(node.reg));
+#if defined(LUAU_T24_DENSE_ADMISSION_RESEARCH)
+        // The helper returns false for an exhausted numeric cursor, without
+        // invoking callbacks. Avoid admitting that cursor to the helper.
+        build.jcc(ConditionX64::NotBelow, nodeDone);
+#else
         build.jcc(ConditionX64::NotBelow, nodeFallback);
+#endif
 #if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
         compactShift = shift.reg;
         compactNode = node.reg;
@@ -472,7 +482,11 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         scaleLuaNodeIndex(build, offset.reg);
         build.add(node.reg, offset.reg);
         build.cmp(dword[node.reg + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
+#if defined(LUAU_T24_DENSE_ADMISSION_RESEARCH)
+        build.jcc(ConditionX64::Equal, emptyNode);
+#else
         build.jcc(ConditionX64::Equal, nodeFallback);
+#endif
 #if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
         build.setLabel(compactLive);
 #endif
@@ -487,6 +501,13 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         build.mov(luauRegTag(ra + 3), dwordReg(shift.reg));
         setLuauReg(build, xmm2, ra + 4, xmmword[node.reg + offsetof(LuaNode, val)]);
         build.jmp(loopRepeat);
+#if defined(LUAU_T24_DENSE_ADMISSION_RESEARCH)
+        // A nil singleton has no later hash node. Keep this test on the nil
+        // edge so ordinary live-node iteration pays no additional guard.
+        build.setLabel(emptyNode);
+        build.cmp(byte[table + offsetof(LuaTable, lsizenode)], 0);
+        build.jcc(ConditionX64::Equal, nodeDone);
+#endif
         build.setLabel(nodeFallback);
     }
 #endif
@@ -526,6 +547,9 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         build.jmp(compactLive);
         build.setLabel(afterCompactFrozen);
     }
+#endif
+#if defined(LUAU_T24_DENSE_ADMISSION_RESEARCH)
+    build.setLabel(nodeDone);
 #endif
 }
 
