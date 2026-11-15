@@ -2117,6 +2117,30 @@ void translateInstGetImport(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::GET_CACHED_IMPORT, build.vmReg(ra), build.vmConst(k), build.constImport(aux), build.constUint(pcpos + 1));
 }
 
+// Component spelling is shared by typed access and the guarded fallback.
+static int getVectorComponentIndex(const char* field, size_t length)
+{
+    if (length != 1)
+        return -1;
+
+    switch (*field)
+    {
+    case 'X':
+    case 'x':
+        return 0;
+    case 'Y':
+    case 'y':
+        return 1;
+    case 'Z':
+    case 'z':
+        return 2;
+    case 'W':
+    case 'w':
+        return 3;
+    default:
+        return -1;
+    }
+}
 
 void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 {
@@ -2193,29 +2217,7 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
         TString* str = gco2ts(build.function.proto->k[aux].value.gc);
         const char* field = getstr(str);
 
-        int component = -1;
-        if (str->len == 1)
-        {
-            switch (*field)
-            {
-            case 'X':
-            case 'x':
-                component = 0;
-                break;
-            case 'Y':
-            case 'y':
-                component = 1;
-                break;
-            case 'Z':
-            case 'z':
-                component = 2;
-                break;
-            case 'W':
-            case 'w':
-                component = 3;
-                break;
-            }
-        }
+        int component = getVectorComponentIndex(field, str->len);
 
         if (component >= 0 && component < LUA_VECTOR_SIZE)
         {
@@ -2340,6 +2342,26 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 #endif
     FallbackStreamScope scope(build, fallback, next);
 
+#if defined(LUAU_T24_VECTOR_COMPONENT_GUARD_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    // Generic arithmetic can produce a vector even when bytecode analysis
+    // could not prove its type. Retain the ordinary table-hit path and use an
+    // authoritative vector guard only on its fallback edge. Existing STORE_VEC
+    // facts can remove that guard and forward component payloads where valid.
+    TString* componentKey = gco2ts(build.function.proto->k[aux].value.gc);
+    int component = getVectorComponentIndex(getstr(componentKey), componentKey->len);
+
+    if (component >= 0)
+    {
+        IrOp generic = build.fallbackBlock(pcpos);
+        build.loadAndCheckTag(build.vmReg(rb), LUA_TVECTOR, generic);
+        IrOp value = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(rb), build.constInt(component * 4));
+        value = build.inst(IrCmd::FLOAT_TO_NUM, value);
+        build.inst(IrCmd::STORE_DOUBLE, build.vmReg(ra), value);
+        build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNUMBER));
+        build.inst(IrCmd::JUMP, next);
+        build.beginBlock(generic);
+    }
+#endif
     build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
     build.inst(IrCmd::JUMP, next);
 }
