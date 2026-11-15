@@ -11,6 +11,8 @@
 #include "ldebug.h"
 #include "lvm.h"
 
+#include <cstring>
+
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauTableFindImprovement, false)
 
 static int foreachi(lua_State* L)
@@ -129,6 +131,18 @@ static void moveelements(lua_State* L, int srct, int dstt, int f, int e, int t, 
         TValue* srcarray = src->array;
         TValue* dstarray = dst->array;
 
+#if defined(LUAU_T24_ARRAY_COPY_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        if (n >= 8)
+        {
+            // Only array slots are copied here: their final four bytes have
+            // no hash-node ownership. memmove also handles both overlap
+            // directions without dropping any of the four vector lanes.
+            std::memmove(dstarray + t - 1, srcarray + f - 1, size_t(n) * sizeof(TValue));
+            for (int j = 0; j < n; ++j)
+                checkliveness(L->global, dstarray + t - 1 + j);
+        }
+        else
+#endif
         if (t > e || t <= f || (dstt != srct && dst != src))
         {
             for (int i = 0; i < n; ++i)
@@ -376,12 +390,31 @@ static int tunpack(lua_State* L)
         luaL_error(L, "too many results to unpack");
 
     // fast-path: direct array-to-stack copy
+#if defined(LUAU_T24_ARRAY_COPY_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    if (unsigned(i) - 1 < unsigned(t->sizearray) && n <= unsigned(t->sizearray) - (unsigned(i) - 1))
+    {
+        const TValue* first = t->array + (i - 1);
+        if (n >= 8)
+        {
+            // Arrays and the Lua stack are separate allocations. Copy the
+            // whole value cells, then publish the stack range once complete.
+            std::memcpy(L->top, first, size_t(n) * sizeof(TValue));
+            for (unsigned j = 0; j < n; ++j)
+                checkliveness(L->global, L->top + j);
+        }
+        else
+            for (unsigned j = 0; j < n; ++j)
+                setobj2s(L, L->top + j, first + j);
+        L->top += n;
+    }
+#else
     if (i == 1 && int(n) <= t->sizearray)
     {
         for (i = 0; i < int(n); i++)
             setobj2s(L, L->top + i, &t->array[i]);
         L->top += n;
     }
+#endif
     else
     {
         // push arg[i..e - 1] (to avoid overflows)
