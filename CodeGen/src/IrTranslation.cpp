@@ -771,6 +771,12 @@ static void translateBinaryNumericFallbackIfRequired(
 #if defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH)
         pairAllowed = true;
 #endif
+#if defined(LUAU_T24_VECTOR_FALLBACK_TRIM_RESEARCH)
+        // This stream is entered only after one of the existing vector-pair
+        // guards failed. Retesting that same pair cannot succeed. Other
+        // vector/scalar combinations still have to be considered separately.
+        pairAllowed = pairAllowed && !vectorPairChecked;
+#endif
 
 #if defined(LUAU_T24_VECTOR_SCALAR_GUARD_RESEARCH)
         const bool scalarAllowed = tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV;
