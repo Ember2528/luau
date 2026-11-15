@@ -150,6 +150,45 @@ public:
 
 TEST_SUITE_BEGIN("Optimization");
 
+TEST_CASE_FIXTURE(IrBuilderFixture, "T24HeapOriginRejectsMutationBetweenPayloadAndTag")
+{
+    enum class Mutation { Call, Upvalue, Close, TableAlias, DifferentOffset } mutation = Mutation::Call;
+    SUBCASE("UserCall") {}
+    SUBCASE("UpvalueStore") { mutation = Mutation::Upvalue; }
+    SUBCASE("CloseUpvalues") { mutation = Mutation::Close; }
+    SUBCASE("PotentialTableAlias") { mutation = Mutation::TableAlias; }
+    SUBCASE("DifferentOffsets") { mutation = Mutation::DifferentOffset; }
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    bool table = mutation == Mutation::TableAlias || mutation == Mutation::DifferentOffset;
+    IrOp address = table ? build.inst(IrCmd::GET_ARR_ADDR, build.inst(IrCmd::LOAD_POINTER, build.vmReg(0)), build.constInt(0))
+                         : build.inst(IrCmd::GET_UPVALUE_ADDR, build.vmUpvalue(0));
+    IrOp payload = build.inst(IrCmd::LOAD_TVALUE, address, build.constInt(0));
+    if (mutation == Mutation::Call)
+        build.inst(IrCmd::CALL, build.vmReg(20), build.constInt(0), build.constInt(0));
+    else if (mutation == Mutation::Upvalue)
+        build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), build.inst(IrCmd::LOAD_TVALUE, build.vmReg(5)),
+            build.inst(IrCmd::LOAD_TAG, build.vmReg(5)));
+    else if (mutation == Mutation::Close)
+        build.inst(IrCmd::CLOSE_UPVALS, build.vmReg(0));
+    else if (mutation == Mutation::TableAlias)
+    {
+        IrOp alias = build.inst(IrCmd::GET_ARR_ADDR, build.inst(IrCmd::LOAD_POINTER, build.vmReg(6)), build.constInt(0));
+        build.inst(IrCmd::STORE_SPLIT_TVALUE, alias, build.constTag(tnumber), build.constDouble(2.0), build.constInt(0));
+    }
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, address, build.constInt(mutation == Mutation::DifferentOffset ? (kVectorSize4 ? 24 : 16) : 0));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(1), payload, build.constInt(0), tag);
+    IrOp reload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(1));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(2), reload, build.constInt(0), build.inst(IrCmd::LOAD_TAG, build.vmReg(1)));
+    build.inst(IrCmd::RETURN, build.vmReg(2), build.constInt(1));
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+
+    // The mismatched snapshots must not masquerade as one coherent TValue.
+    CHECK(build.function.instOp(reload).cmd == IrCmd::LOAD_TVALUE);
+}
+
 TEST_CASE_FIXTURE(IrBuilderFixture, "T24ExplicitUpvalueUsesActualCheckedTag")
 {
     if (!kVectorSize4)

@@ -91,6 +91,17 @@ struct NodeSlotState
     bool knownToNotBeNil;
 };
 
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+// Payload and tag loads are separate in T24.  Equality of their addresses is
+// insufficient: a store or a user call may have occurred between the loads.
+struct TValueLoadOrigin
+{
+    IrOp address;
+    int offset;
+    uint64_t epoch;
+    bool upvalue;
+};
+#endif
 
 static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
 {
@@ -296,6 +307,10 @@ struct ConstPropState
     // As an example, when Luau call is performed, both volatile registers and stack slots might be overwritten
     void invalidateValuePropagation()
     {
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        invalidateTValueLoadOrigins();
+        tvalueLoadOrigins.clear();
+#endif
         valueMap.clear();
         upvalueMap.clear();
 
@@ -316,6 +331,9 @@ struct ConstPropState
     // Same goes for table array elements as well
     void invalidateHeapTableData()
     {
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        tableLoadEpoch++;
+#endif
         getSlotNodeCache.clear();
 
         checkSlotMatchCache.clear();
@@ -432,6 +450,17 @@ struct ConstPropState
         }
 
         IrInst* tagLoad = function.asInstOp(tagOp);
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        if (tagLoad && value->cmd == IrCmd::LOAD_TVALUE && tagLoad->cmd == IrCmd::LOAD_TAG)
+        {
+            const TValueLoadOrigin* payload = tvalueLoadOrigins.find(valueOp.index);
+            const TValueLoadOrigin* tag = tvalueLoadOrigins.find(tagOp.index);
+            if (payload && tag && payload->address == tag->address && payload->offset == tag->offset &&
+                payload->upvalue == tag->upvalue && payload->epoch == tag->epoch &&
+                payload->epoch == (payload->upvalue ? upvalueLoadEpoch : tableLoadEpoch))
+                return true;
+        }
+#endif
         if (!tagLoad || value->cmd != IrCmd::LOAD_TVALUE || tagLoad->cmd != IrCmd::LOAD_TAG ||
             OP_A(value).kind != IrOpKind::VmReg || OP_A(value) != OP_A(tagLoad) ||
             (HAS_OP_B(*value) && function.asIntOp(OP_B(value)) != 0) ||
@@ -443,6 +472,44 @@ struct ConstPropState
         return valueLink && tagLink && valueLink->reg == tagLink->reg && valueLink->version == tagLink->version;
     }
 
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+    void invalidateTValueLoadOrigins()
+    {
+        tableLoadEpoch++;
+        upvalueLoadEpoch++;
+    }
+
+    void recordTValueLoadOrigin(IrInst& inst, uint32_t index)
+    {
+        if (inst.cmd != IrCmd::LOAD_TAG && inst.cmd != IrCmd::LOAD_TVALUE)
+            return;
+
+        IrInst* address = function.asInstOp(OP_A(inst));
+        if (!address)
+            return;
+
+        std::optional<int> offset = HAS_OP_B(inst) ? function.asIntOp(OP_B(inst)) : std::optional<int>(0);
+        if (!offset)
+            return;
+
+        if (address->cmd == IrCmd::GET_UPVALUE_ADDR && *offset == 0)
+        {
+            // GET_UPVALUE_ADDR itself is not CSE'd: use the upvalue identity,
+            // and require both reads to belong to the same mutation epoch.
+            tvalueLoadOrigins[index] = {OP_A(*address), 0, upvalueLoadEpoch, true};
+        }
+        else if (address->cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR && *offset == 0)
+        {
+            tvalueLoadOrigins[index] = {OP_A(inst), 0, upvalueLoadEpoch, true};
+        }
+        else if (address->cmd == IrCmd::GET_ARR_ADDR || (address->cmd == IrCmd::GET_SLOT_NODE_ADDR && *offset == 0))
+        {
+            // Table address reuse already requires the existing slot/array
+            // validation.  Do not infer alias equality from just an index.
+            tvalueLoadOrigins[index] = {OP_A(inst), *offset, tableLoadEpoch, false};
+        }
+    }
+#endif
 
 #if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH) || defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
     // This is a payload fact, not a tag inference.  An explicit store tag is
@@ -1291,6 +1358,12 @@ struct ConstPropState
 
     void invalidateTableStoreLocation(IrInst targetAddr, IrOp writeOffsetOp, uint8_t tag)
     {
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        if (targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR)
+            upvalueLoadEpoch++;
+        else
+            tableLoadEpoch++;
+#endif
         if (targetAddr.cmd == IrCmd::GET_SLOT_NODE_ADDR)
         {
             CODEGEN_ASSERT(function.intOp(writeOffsetOp) == 0);
@@ -1382,6 +1455,50 @@ struct ConstPropState
         }
     }
 
+#if defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+    bool substituteHeapTagLoad(IrInst& inst)
+    {
+        IrInst* address = function.asInstOp(OP_A(inst));
+        if (!address)
+            return false;
+
+        uint32_t previous = kInvalidInstIdx;
+        IrOp offset = HAS_OP_B(inst) ? OP_B(inst) : build.constInt(0);
+        if (address->cmd == IrCmd::GET_SLOT_NODE_ADDR && function.asIntOp(offset) == 0)
+        {
+            if (uint32_t* cached = hashValueCache.find(OP_A(inst).index))
+                previous = *cached;
+        }
+        else if (address->cmd == IrCmd::GET_ARR_ADDR)
+        {
+            IrOp combinedOffset = getCombinedArrayLoadOffsetOp(*address, offset);
+            for (const ArrayValueEntry& entry : arrayValueCache)
+                if (entry.pointer == OP_A(inst).index && entry.offset == combinedOffset)
+                {
+                    previous = entry.value;
+                    break;
+                }
+        }
+
+        if (previous == kInvalidInstIdx)
+            return false;
+
+        IrInst& value = function.instructions[previous];
+        uint8_t tag = kUnknownTag;
+        if (value.cmd == IrCmd::STORE_SPLIT_TVALUE)
+            tag = function.tagOp(OP_B(value));
+        else if (value.cmd == IrCmd::STORE_TVALUE)
+            tag = HAS_OP_D(value) ? function.asTagOp(OP_D(value)).value_or(kUnknownTag) : tryGetTag(OP_B(value));
+        else if (value.cmd == IrCmd::LOAD_TVALUE)
+            tag = tryGetTag(IrOp{IrOpKind::Inst, previous});
+
+        if (tag == kUnknownTag)
+            return false;
+
+        substitute(function, inst, build.constTag(tag));
+        return true;
+    }
+#endif
 
     // Used to compute the pressure of the cached value 'set' on the spill registers
     // We want to find out the maximum live range intersection count between the cached value at 'slot' and current instruction
@@ -1492,6 +1609,11 @@ struct ConstPropState
     DenseHashMap<uint32_t, uint8_t> instTag;
     DenseHashMap<uint32_t, IrOp> instValue;
 
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+    DenseHashMap<uint32_t, TValueLoadOrigin> tvalueLoadOrigins;
+    uint64_t tableLoadEpoch = 0;
+    uint64_t upvalueLoadEpoch = 0;
+#endif
 
     DenseHashMap<IrInst, uint32_t, IrInstHash, IrInstEq> valueMap;
 
@@ -1661,6 +1783,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 {
     state.instPos++;
 
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+    state.recordTValueLoadOrigin(inst, index);
+
+    // These partial heap stores initialize closure cells rather than VM
+    // registers.  Do not pair a prior payload read with their later tag read.
+    if ((inst.cmd == IrCmd::STORE_TAG || inst.cmd == IrCmd::STORE_POINTER || inst.cmd == IrCmd::STORE_DOUBLE ||
+            inst.cmd == IrCmd::STORE_INT || inst.cmd == IrCmd::STORE_EXTRA) &&
+        OP_A(inst).kind == IrOpKind::Inst)
+        state.invalidateTValueLoadOrigins();
+#endif
 
     switch (inst.cmd)
     {
@@ -1678,6 +1810,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
             state.substituteOrRecordVmRegLoad(inst);
         }
+#if defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+        else
+            state.substituteHeapTagLoad(inst);
+#endif
         break;
     case IrCmd::LOAD_POINTER:
         if (OP_A(inst).kind == IrOpKind::VmReg)
@@ -2111,6 +2247,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             destinationEnabled |= OP_A(inst).kind == IrOpKind::VmReg &&
                                   (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0);
 #endif
+#if defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+            destinationEnabled |= OP_A(inst).kind == IrOpKind::Inst;
+#endif
             if (destinationEnabled)
             {
                 explicitScalarFacts = true;
@@ -2463,6 +2602,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
 #endif
         bool sameTvalue = sizeof(TValue) == 16 || state.valueHasSameTag(OP_B(inst), OPT_OP_C(inst));
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        // Different upvalue indices can conservatively be treated as aliases.
+        // Evaluate the source proof before beginning the new mutation epoch.
+        state.upvalueLoadEpoch++;
+        state.upvalueMap.clear();
+#endif
         if (sameTvalue)
             state.forwardVmUpvalueStoreToLoad(inst);
         else
@@ -2483,6 +2628,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     }
     case IrCmd::CLOSE_UPVALS:
+#if defined(LUAU_T24_HEAP_TAG_PROVENANCE_RESEARCH)
+        // Closing may relocate an open upvalue's backing address.  The value
+        // is unchanged, but do not extend a heap-load restore location over it.
+        state.invalidateTValueLoadOrigins();
+        state.upvalueMap.clear();
+#endif
         break;
     case IrCmd::CHECK_TAG:
     {
