@@ -2749,6 +2749,15 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         finalizeTargetLabel(OP_B(inst), index, fresh);
         break;
     }
+    case IrCmd::CHECK_HASH_SINGLETON:
+    {
+        Label fresh;
+        RegisterA64 temp = regs.allocTemp(KindA64::w);
+        build.ldrb(temp, mem(regOp(OP_A(inst)), offsetof(LuaTable, lsizenode)));
+        build.cbnz(temp, getTargetLabel(OP_B(inst), index, fresh));
+        finalizeTargetLabel(OP_B(inst), index, fresh);
+        break;
+    }
     case IrCmd::CHECK_SAFE_ENV:
     {
         checkSafeEnv(OP_A(inst), index, next);

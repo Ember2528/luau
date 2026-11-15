@@ -386,6 +386,8 @@ const char* getCmdName(IrCmd cmd)
         return "CHECK_READONLY";
     case IrCmd::CHECK_NO_METATABLE:
         return "CHECK_NO_METATABLE";
+    case IrCmd::CHECK_HASH_SINGLETON:
+        return "CHECK_HASH_SINGLETON";
     case IrCmd::CHECK_SAFE_ENV:
         return "CHECK_SAFE_ENV";
     case IrCmd::CHECK_YIELDABLE:

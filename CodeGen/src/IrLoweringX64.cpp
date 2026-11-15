@@ -2520,6 +2520,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(qword[regOp(OP_A(inst)) + offsetof(LuaTable, metatable)], 0);
         jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_B(inst), index, next);
         break;
+    case IrCmd::CHECK_HASH_SINGLETON:
+        build.cmp(byte[regOp(OP_A(inst)) + offsetof(LuaTable, lsizenode)], 0);
+        jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_B(inst), index, next);
+        break;
     case IrCmd::CHECK_SAFE_ENV:
     {
         checkSafeEnv(OP_A(inst), index, next);

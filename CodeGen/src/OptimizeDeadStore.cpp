@@ -1041,6 +1041,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
         state.checkLiveIns(OP_B(inst), index, true);
         break;
     case IrCmd::CHECK_NO_METATABLE:
+    case IrCmd::CHECK_HASH_SINGLETON:
         state.checkLiveIns(OP_B(inst), index, true);
         break;
     case IrCmd::CHECK_SAFE_ENV:

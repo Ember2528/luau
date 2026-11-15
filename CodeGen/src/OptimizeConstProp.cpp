@@ -3422,6 +3422,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     }
 
+    case IrCmd::CHECK_HASH_SINGLETON: // No reusable shape fact is recorded.
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::BARRIER_TABLE_BACK:

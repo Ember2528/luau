@@ -712,6 +712,12 @@ enum class IrCmd : uint8_t
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_NO_METATABLE,
 
+    // Guard that a table has one hash node, including the shared dummy node.
+    // This establishes absence only after its cached slot failed a live-key match.
+    // A: pointer (LuaTable)
+    // B: block/vmexit/undef
+    CHECK_HASH_SINGLETON,
+
     // Guard against executing in unsafe environment, exits to VM on check failure
     // A: block/vmexit/undef
     // When undef is specified, execution is aborted on check failure

@@ -352,6 +352,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_TRUTHY:
     case IrCmd::CHECK_READONLY:
     case IrCmd::CHECK_NO_METATABLE:
+    case IrCmd::CHECK_HASH_SINGLETON:
     case IrCmd::CHECK_SAFE_ENV:
     case IrCmd::CHECK_YIELDABLE:
     case IrCmd::CHECK_ARRAY_SIZE:

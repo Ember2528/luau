@@ -2171,12 +2171,29 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 
     IrOp addrSlotEl = build.inst(IrCmd::GET_SLOT_NODE_ADDR, vb, build.constUint(pcpos), build.vmConst(aux));
 
-    build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotEl, build.vmConst(aux), fallback);
+    IrOp cachedMiss = fallback;
+#if defined(LUAU_T24_BALANCED_NATIVE_MISS_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    cachedMiss = build.fallbackBlock(pcpos);
+#endif
+    build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotEl, build.vmConst(aux), cachedMiss);
 
     LoadedTValue tvn = loadTValueAndTag(build, addrSlotEl, build.constInt(offsetof(LuaNode, val)));
     storeTValueAndTag(build, build.vmReg(ra), tvn);
 
     IrOp next = build.blockAtInst(pcpos + 2);
+#if defined(LUAU_T24_BALANCED_NATIVE_MISS_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    build.inst(IrCmd::JUMP, next);
+    build.beginBlock(cachedMiss);
+
+    // There is no callback or collecting operation between the failed slot
+    // check and these guards. In a one-node arena every hint masks to node 0,
+    // so its failed live-string match proves the queried string is absent.
+    // Larger arenas use the original helper without a hash-home probe.
+    IrOp missTable = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_HASH_SINGLETON, missTable, fallback);
+    build.inst(IrCmd::CHECK_NO_METATABLE, missTable, fallback);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNIL));
+#endif
     FallbackStreamScope scope(build, fallback, next);
 
     build.inst(IrCmd::FALLBACK_GETTABLEKS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.vmConst(aux));
