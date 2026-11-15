@@ -132,6 +132,21 @@ jobs:
         build/Luau.Conformance --codegen --fflags=true
         build/Luau.Conformance --codegen -O2 --fflags=true
 
+  compact-t24:
+    name: compact T24 runtime
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: configure
+      run: cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DLUAU_WERROR=ON -DLUAU_VECTOR_FOUR_WIDE=ON -DLUAU_T24_CANDIDATE=ON
+    - name: build
+      run: cmake --build build --target Luau.Repl.CLI Luau.UnitTest Luau.Conformance -j2
+    - name: test
+      run: |
+        build/Luau.UnitTest --test-suite=Compiler,BytecodeCompiler,BytecodeInliner,CodeAllocation,IrRegAllocX64,IrCallWrapperX64,x64Assembly,A64Assembly,Optimization,ConstantPropagation,DSE
+        build/Luau.Conformance --test-suite=Conformance,WideTValueIrGuards
+        build/Luau.Conformance --test-suite=Conformance,WideTValueIrGuards --codegen
+
   coverage:
     runs-on: ubuntu-22.04
     steps:

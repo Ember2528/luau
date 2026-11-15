@@ -82,3 +82,8 @@ Other than the STL/CRT, Luau library components don't have external dependencies
 Luau implementation is distributed under the terms of [MIT License](https://github.com/luau-lang/luau/blob/master/LICENSE.txt). It is based on the Lua 5.x implementation, also under the MIT License.
 
 When Luau is integrated into external projects, we ask that you honor the license agreement and include Luau attribution into the user-facing product documentation. Attribution making use of the [Luau logo](https://github.com/luau-lang/site/blob/master/logo.svg) is also encouraged when reasonable.
+
+## Compact four-wide runtime
+
+Build options, test commands and the interpreter/native patch boundaries are
+described in [docs/T24Candidate.md](docs/T24Candidate.md).
