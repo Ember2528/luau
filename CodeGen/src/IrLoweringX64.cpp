@@ -35,7 +35,6 @@ IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, Modu
     , stats(stats)
     , regs(logger, build, function, stats)
     , valueTracker(logger, function)
-
 {
     valueTracker.setRestoreCallback(
         &regs,
@@ -56,37 +55,287 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     switch (inst.cmd)
     {
-    case IrCmd::SELECT_VEC:
-    case IrCmd::ADD_VEC:
-    case IrCmd::SUB_VEC:
-    case IrCmd::MUL_VEC:
-    case IrCmd::DIV_VEC:
-    case IrCmd::IDIV_VEC:
-    case IrCmd::MULADD_VEC:
-    case IrCmd::UNM_VEC:
-    case IrCmd::MIN_VEC:
-    case IrCmd::MAX_VEC:
-    case IrCmd::FLOOR_VEC:
-    case IrCmd::CEIL_VEC:
-    case IrCmd::ABS_VEC:
-    case IrCmd::DOT_VEC:
-    case IrCmd::EXTRACT_VEC:
-    case IrCmd::FLOAT_TO_VEC:
-    case IrCmd::TAG_VECTOR:
-    case IrCmd::UNTAG_VECTOR:
-    case IrCmd::BUFFER_READVECTOR:
-    case IrCmd::BUFFER_WRITEVECTOR:
-    case IrCmd::LOAD_VEC:
-    case IrCmd::STORE_VEC:
-    case IrCmd::STORE_VEC_COMPONENTS:
-    case IrCmd::BUILD_VEC:
-    case IrCmd::TVALUE_TO_VEC:
-    case IrCmd::GET_UPVALUE_ADDR:
-        // Added IR forms stay dormant until this backend is installed.
-        regs.error = true;
-        return;
+    case IrCmd::LEGACY_STORE_VECTOR:
+        storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 0), OP_B(inst));
+        storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 1), OP_C(inst));
+        storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 2), OP_D(inst));
+
+        if (HAS_OP_E(inst))
+            build.mov(luauRegTag(vmRegOp(OP_A(inst))), tagOp(OP_E(inst)));
+        break;
+    case IrCmd::LEGACY_SELECT_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_C(inst), OP_D(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+        RegisterX64 tmpc = legacyVecOp(OP_C(inst), tmp1);
+        RegisterX64 tmpd = legacyVecOp(OP_D(inst), tmp2);
+
+        build.vcmpeqps(inst.regX64, tmpc, tmpd);
+        build.vblendvps(inst.regX64, legacyVecOp(OP_A(inst), tmp1), legacyVecOp(OP_B(inst), tmp2), inst.regX64);
+
+        break;
+    }
+    case IrCmd::LEGACY_ADD_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vaddps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_SUB_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vsubps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_MUL_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vmulps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_DIV_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vdivps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_IDIV_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vdivps(inst.regX64, tmpa, tmpb);
+        build.vroundps(inst.regX64, inst.regX64, RoundingModeX64::RoundToNegativeInfinity);
+        break;
+    }
+    case IrCmd::LEGACY_MULADD_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+        ScopedRegX64 tmp3{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = legacyVecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpc = legacyVecOp(OP_C(inst), tmp3);
+
+        if ((build.features & Feature_FMA3) != 0)
+        {
+            if (inst.regX64 != tmpa)
+                build.vmovups(inst.regX64, tmpa);
+
+            build.vfmadd213ps(inst.regX64, tmpb, tmpc);
+        }
+        else
+        {
+            build.vmulps(inst.regX64, tmpa, tmpb);
+            build.vaddps(inst.regX64, inst.regX64, tmpc);
+        }
+
+        break;
+    }
+    case IrCmd::LEGACY_UNM_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        build.vxorpd(inst.regX64, regOp(OP_A(inst)), build.f32x4(-0.0, -0.0, -0.0, -0.0));
+        break;
+    }
+    case IrCmd::LEGACY_MIN_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vminps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_MAX_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+        build.vmaxps(inst.regX64, tmpa, tmpb);
+        break;
+    }
+    case IrCmd::LEGACY_FLOOR_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+
+        build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToNegativeInfinity);
+        break;
+    }
+    case IrCmd::LEGACY_CEIL_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+
+        build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToPositiveInfinity);
+        break;
+    }
+    case IrCmd::LEGACY_ABS_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+
+        build.vandps(inst.regX64, tmpa, build.u32x4(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff));
+        break;
+    }
+    case IrCmd::LEGACY_DOT_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
+
+        ScopedRegX64 tmp1{regs};
+        ScopedRegX64 tmp2{regs};
+
+        if (FFlag::LuauCodegenMultiLaneDot)
+        {
+            int lanes = intOp(OP_C(inst));
+            CODEGEN_ASSERT(lanes == 3 || lanes == 4);
+
+            if (lanes == 4)
+            {
+                RegisterX64 tmpa = regOp(OP_A(inst));
+                RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : regOp(OP_B(inst));
+
+                build.vdpps(inst.regX64, tmpa, tmpb, lanes == 4 ? 0xf1 : 0x71); // 0xf = 0b0111, sum all 4 products into first float
+            }
+            else
+            {
+                RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+                RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+                build.vdpps(inst.regX64, tmpa, tmpb, 0x71); // 0x7 = 0b0111, sum first 3 products into first float
+            }
+        }
+        else
+        {
+            RegisterX64 tmpa = legacyVecOp(OP_A(inst), tmp1);
+            RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : legacyVecOp(OP_B(inst), tmp2);
+
+            build.vdpps(inst.regX64, tmpa, tmpb, 0x71); // 7 = 0b0111, sum first 3 products into first float
+        }
+        break;
+    }
+    case IrCmd::LEGACY_EXTRACT_VEC:
+    {
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        build.vpshufps(inst.regX64, regOp(OP_A(inst)), regOp(OP_A(inst)), intOp(OP_B(inst)));
+        break;
+    }
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
+        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+
+        if (OP_A(inst).kind == IrOpKind::Constant)
+        {
+            float value = float(doubleOp(OP_A(inst)));
+            uint32_t asU32;
+            static_assert(sizeof(asU32) == sizeof(value), "Expecting float to be 32-bit");
+            memcpy(&asU32, &value, sizeof(value));
+
+            build.vmovaps(inst.regX64, build.u32x4(asU32, asU32, asU32, 0));
+        }
+        else
+        {
+            build.vpshufps(inst.regX64, regOp(OP_A(inst)), regOp(OP_A(inst)), 0b00'00'00'00);
+        }
+        break;
+    case IrCmd::LEGACY_TAG_VECTOR:
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        build.vpinsrd(inst.regX64, regOp(OP_A(inst)), build.i32(LUA_TVECTOR), 3);
+        break;
+    case IrCmd::LEGACY_UNTAG_VECTOR:
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+
+        build.vandps(inst.regX64, regOp(OP_A(inst)), build.u32x4(~0u, ~0u, ~0u, 0));
+        break;
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
+    {
+        CODEGEN_ASSERT(intOp(OP_D(inst)) == 2 || intOp(OP_D(inst)) == 3);
+        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+
+        // vmovsd loads x,y into the low 64 bits and zeroes the upper lanes, so a 2-component read is already [x, y, 0, 0]
+        build.vmovsd(inst.regX64, qword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_C(inst)))]);
+
+        if (intOp(OP_D(inst)) == 3)
+            build.vpinsrd(inst.regX64, inst.regX64, dword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_C(inst))) + 8], 2);
+        break;
+    }
+
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+    {
+        CODEGEN_ASSERT(intOp(OP_E(inst)) == 2 || intOp(OP_E(inst)) == 3);
+        RegisterX64 value = regOp(OP_C(inst));
+
+        build.vmovsd(qword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)))], value); // x, y
+
+        if (intOp(OP_E(inst)) == 3)
+        {
+            ScopedRegX64 tmp{regs, SizeX64::xmmword};
+            build.vpshufps(tmp.reg, value, value, 0b10); // move lane 2 (z) into lane 0
+            build.vmovss(dword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst))) + 8], tmp.reg);
+        }
+        break;
+    }
+
     case IrCmd::LOAD_TAG:
+    {
         inst.regX64 = regs.allocReg(SizeX64::dword, index);
+
+        int addrOffset = HAS_OP_B(inst) ? intOp(OP_B(inst)) : 0;
 
         if (OP_A(inst).kind == IrOpKind::VmReg)
             build.mov(inst.regX64, luauRegTag(vmRegOp(OP_A(inst))));
@@ -95,10 +344,11 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // If we have a register, we assume it's a pointer to TValue
         // We might introduce explicit operand types in the future to make this more robust
         else if (OP_A(inst).kind == IrOpKind::Inst)
-            build.mov(inst.regX64, dword[regOp(OP_A(inst)) + offsetof(TValue, tt)]);
+            build.mov(inst.regX64, dword[regOp(OP_A(inst)) + offsetof(TValue, tt) + addrOffset]);
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;
+    }
     case IrCmd::LOAD_POINTER:
         inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
@@ -139,19 +389,23 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;
     case IrCmd::LOAD_TVALUE:
+    case IrCmd::LOAD_VEC:
     {
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
 
         int addrOffset = HAS_OP_B(inst) ? intOp(OP_B(inst)) : 0;
+        OperandX64 source = noreg;
 
         if (OP_A(inst).kind == IrOpKind::VmReg)
-            build.vmovups(inst.regX64, luauReg(vmRegOp(OP_A(inst))));
+            source = luauReg(vmRegOp(OP_A(inst)));
         else if (OP_A(inst).kind == IrOpKind::VmConst)
-            build.vmovups(inst.regX64, luauConstant(vmConstOp(OP_A(inst))));
+            source = luauConstant(vmConstOp(OP_A(inst)));
         else if (OP_A(inst).kind == IrOpKind::Inst)
-            build.vmovups(inst.regX64, xmmword[regOp(OP_A(inst)) + addrOffset]);
+            source = xmmword[regOp(OP_A(inst)) + addrOffset];
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
+
+        build.vmovups(inst.regX64, source);
         break;
     }
     case IrCmd::LOAD_ENV:
@@ -168,7 +422,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             if (dwordReg(inst.regX64) != regOp(OP_B(inst)))
                 build.mov(dwordReg(inst.regX64), regOp(OP_B(inst)));
 
-            build.shl(dwordReg(inst.regX64), kTValueSizeLog2);
+            scaleTValueIndex(build, dwordReg(inst.regX64));
             build.add(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuaTable, array)]);
         }
         else if (OP_B(inst).kind == IrOpKind::Constant)
@@ -209,7 +463,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.shl(dwordReg(tmp.reg), byteReg(shiftTmp.reg));
         build.dec(dwordReg(tmp.reg));
         build.and_(dwordReg(tmp.reg), uintOp(OP_B(inst)));
-        build.shl(tmp.reg, kLuaNodeSizeLog2);
+        scaleLuaNodeIndex(build, tmp.reg);
         build.add(inst.regX64, tmp.reg);
         break;
     };
@@ -307,14 +561,47 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;
-    case IrCmd::LEGACY_STORE_VECTOR:
+    case IrCmd::STORE_VEC_COMPONENTS:
+        CODEGEN_ASSERT(LUA_VECTOR_DOUBLE == 0);
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 0), OP_B(inst));
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 1), OP_C(inst));
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 2), OP_D(inst));
 
-        if (HAS_OP_E(inst))
-            build.mov(luauRegTag(vmRegOp(OP_A(inst))), tagOp(OP_E(inst)));
+#if LUA_VECTOR_SIZE == 4
+        storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 3), OP_E(inst));
+#endif
+
+        build.mov(luauRegTag(vmRegOp(OP_A(inst))), LUA_TVECTOR);
         break;
+    case IrCmd::STORE_VEC:
+    {
+        CODEGEN_ASSERT(LUA_VECTOR_DOUBLE == 0);
+        CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::VmReg);
+
+        RegisterX64 source = rawVectorRegOp(OP_B(inst));
+        if constexpr (sizeof(TValue) == 16)
+        {
+            // Packing is local to the store; preserve a still-live semantic vector bit for bit.
+            ScopedRegX64 tmp{regs};
+            RegisterX64 packed = source;
+            if (!regs.isLastUseReg(function.instOp(OP_B(inst)), index))
+            {
+                tmp.alloc(SizeX64::xmmword);
+                packed = tmp.reg;
+            }
+
+            build.vpinsrd(packed, source, build.i32(LUA_TVECTOR), 3);
+            build.vmovups(luauReg(vmRegOp(OP_A(inst))), packed);
+        }
+        else
+        {
+            // All four payload lanes belong to the value; the tag is outside the SIMD register.
+            build.vmovups(luauReg(vmRegOp(OP_A(inst))), source);
+            build.mov(luauRegTag(vmRegOp(OP_A(inst))), LUA_TVECTOR);
+        }
+        // Materialize before afterInstLowering advertises this VM slot as a restore location.
+        break;
+    }
     case IrCmd::STORE_TVALUE:
     {
         int addrOffset = HAS_OP_C(inst) ? intOp(OP_C(inst)) : 0;
@@ -325,6 +612,17 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.vmovups(xmmword[regOp(OP_A(inst)) + addrOffset], regOp(OP_B(inst)));
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
+
+        if (HAS_OP_D(inst))
+        {
+            OperandX64 tagLhs =
+                OP_A(inst).kind == IrOpKind::Inst ? dword[regOp(OP_A(inst)) + offsetof(TValue, tt) + addrOffset] : luauRegTag(vmRegOp(OP_A(inst)));
+
+            if (OP_D(inst).kind == IrOpKind::Constant)
+                build.mov(tagLhs, tagOp(OP_D(inst)));
+            else
+                build.mov(tagLhs, regOp(OP_D(inst)));
+        }
         break;
     }
     case IrCmd::STORE_SPLIT_TVALUE:
@@ -1204,18 +1502,19 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         break;
     }
-    case IrCmd::LEGACY_SELECT_VEC:
+    case IrCmd::SELECT_VEC:
     {
-        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_C(inst), OP_D(inst)});
+        // The predicate is written before the endpoints are read, so preserve aliased endpoints.
+        IrOp reuseC = OP_C(inst) != OP_A(inst) && OP_C(inst) != OP_B(inst) ? OP_C(inst) : IrOp{};
+        IrOp reuseD = OP_D(inst) != OP_A(inst) && OP_D(inst) != OP_B(inst) ? OP_D(inst) : IrOp{};
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {reuseC, reuseD});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-        RegisterX64 tmpc = vecOp(OP_C(inst), tmp1);
-        RegisterX64 tmpd = vecOp(OP_D(inst), tmp2);
-
-        build.vcmpeqps(inst.regX64, tmpc, tmpd);
-        build.vblendvps(inst.regX64, vecOp(OP_A(inst), tmp1), vecOp(OP_B(inst), tmp2), inst.regX64);
-
+        RegisterX64 c = numericVectorRegOp(OP_C(inst));
+        RegisterX64 d = numericVectorRegOp(OP_D(inst));
+        build.vcmpeqps(inst.regX64, c, d);
+        RegisterX64 a = numericVectorRegOp(OP_A(inst));
+        RegisterX64 b = numericVectorRegOp(OP_B(inst));
+        build.vblendvps(inst.regX64, a, b, inst.regX64);
         break;
     }
     case IrCmd::SELECT_IF_TRUTHY:
@@ -1249,82 +1548,64 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.setLabel(exit);
         break;
     }
-    case IrCmd::LEGACY_ADD_VEC:
+    case IrCmd::ADD_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vaddps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_SUB_VEC:
+    case IrCmd::SUB_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vsubps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_MUL_VEC:
+    case IrCmd::MUL_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vmulps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_DIV_VEC:
+    case IrCmd::DIV_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vdivps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_IDIV_VEC:
+    case IrCmd::IDIV_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vdivps(inst.regX64, tmpa, tmpb);
         build.vroundps(inst.regX64, inst.regX64, RoundingModeX64::RoundToNegativeInfinity);
         break;
     }
-    case IrCmd::LEGACY_MULADD_VEC:
+    case IrCmd::MULADD_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-        ScopedRegX64 tmp3{regs};
 
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = vecOp(OP_B(inst), tmp2);
-        RegisterX64 tmpc = vecOp(OP_C(inst), tmp3);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
+        RegisterX64 tmpc = numericVectorRegOp(OP_C(inst));
 
         if ((build.features & Feature_FMA3) != 0)
         {
@@ -1341,110 +1622,118 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         break;
     }
-    case IrCmd::LEGACY_UNM_VEC:
+    case IrCmd::UNM_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vxorpd(inst.regX64, regOp(OP_A(inst)), build.f32x4(-0.0, -0.0, -0.0, -0.0));
+        RegisterX64 source = rawVectorRegOp(OP_A(inst));
+        build.vxorpd(inst.regX64, source, build.f32x4(-0.0, -0.0, -0.0, LUA_VECTOR_SIZE == 4 ? -0.0 : 0.0));
         break;
     }
-    case IrCmd::LEGACY_MIN_VEC:
+    case IrCmd::MIN_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vminps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_MAX_VEC:
+    case IrCmd::MAX_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        ScopedRegX64 tmp2{regs};
-
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-        RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
+        RegisterX64 tmpb = numericVectorRegOp(OP_B(inst));
 
         build.vmaxps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::LEGACY_FLOOR_VEC:
+    case IrCmd::FLOOR_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
 
         build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToNegativeInfinity);
         break;
     }
-    case IrCmd::LEGACY_CEIL_VEC:
+    case IrCmd::CEIL_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpa = numericVectorRegOp(OP_A(inst));
 
         build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToPositiveInfinity);
         break;
     }
-    case IrCmd::LEGACY_ABS_VEC:
+    case IrCmd::ABS_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
-        ScopedRegX64 tmp1{regs};
-        RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
+        RegisterX64 tmpa = rawVectorRegOp(OP_A(inst));
 
-        build.vandps(inst.regX64, tmpa, build.u32x4(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff));
+        build.vandps(inst.regX64, tmpa, build.u32x4(0x7fffffff, 0x7fffffff, 0x7fffffff, LUA_VECTOR_SIZE == 4 ? 0x7fffffff : 0));
         break;
     }
-    case IrCmd::LEGACY_DOT_VEC:
+    case IrCmd::DOT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
         ScopedRegX64 tmp1{regs};
         ScopedRegX64 tmp2{regs};
+        int lanes = FFlag::LuauCodegenMultiLaneDot ? intOp(OP_C(inst)) : LUA_VECTOR_SIZE;
+        CODEGEN_ASSERT(lanes == 3 || lanes == 4);
 
-        if (FFlag::LuauCodegenMultiLaneDot)
+        // Upstream also permits raw packed 128-bit values, while the T24
+        // path uses semantic vectors. Preserve both operand kinds.
+        auto dotOperand = [&](IrOp op, ScopedRegX64& temp) -> RegisterX64 {
+            IrValueKind kind = getCmdValueKind(function.instOp(op).cmd);
+            if (kind == IrValueKind::Vector)
+                return lanes == 3 && sizeof(TValue) == 16 ? numericVectorRegOp(op) : rawVectorRegOp(op);
+
+            CODEGEN_ASSERT(kind == IrValueKind::Tvalue);
+            RegisterX64 value = regOp(op);
+            if constexpr (sizeof(TValue) == 16)
+            {
+                if (lanes == 3)
+                {
+                    temp.alloc(SizeX64::xmmword);
+                    build.vandps(temp.reg, value, build.u32x4(~0u, ~0u, ~0u, 0));
+                    return temp.reg;
+                }
+            }
+            return value;
+        };
+        RegisterX64 tmpa = dotOperand(OP_A(inst), tmp1);
+        RegisterX64 tmpb = OP_A(inst) == OP_B(inst) ? tmpa : dotOperand(OP_B(inst), tmp2);
+
+#if LUA_VECTOR_SIZE == 4
+        if (lanes == 4)
         {
-            int lanes = intOp(OP_C(inst));
-            CODEGEN_ASSERT(lanes == 3 || lanes == 4);
-
-            if (lanes == 4)
-            {
-                RegisterX64 tmpa = regOp(OP_A(inst));
-                RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : regOp(OP_B(inst));
-
-                build.vdpps(inst.regX64, tmpa, tmpb, lanes == 4 ? 0xf1 : 0x71); // 0xf = 0b0111, sum all 4 products into first float
-            }
-            else
-            {
-                RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-                RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
-
-                build.vdpps(inst.regX64, tmpa, tmpb, 0x71); // 0x7 = 0b0111, sum first 3 products into first float
-            }
+            // Match the VM's left-to-right four-lane reduction.
+            ScopedRegX64 products{regs, SizeX64::xmmword};
+            ScopedRegX64 lane{regs, SizeX64::xmmword};
+            build.vmulps(products.reg, tmpa, tmpb);
+            build.vpshufps(lane.reg, products.reg, products.reg, 0x55);
+            build.vaddss(inst.regX64, products.reg, lane.reg);
+            build.vpshufps(lane.reg, products.reg, products.reg, 0xaa);
+            build.vaddss(inst.regX64, inst.regX64, lane.reg);
+            build.vpshufps(lane.reg, products.reg, products.reg, 0xff);
+            build.vaddss(inst.regX64, inst.regX64, lane.reg);
         }
         else
-        {
-            RegisterX64 tmpa = vecOp(OP_A(inst), tmp1);
-            RegisterX64 tmpb = (OP_A(inst) == OP_B(inst)) ? tmpa : vecOp(OP_B(inst), tmp2);
-
-            build.vdpps(inst.regX64, tmpa, tmpb, 0x71); // 7 = 0b0111, sum first 3 products into first float
-        }
+#endif
+            build.vdpps(inst.regX64, tmpa, tmpb, lanes == 4 ? 0xf1 : 0x71);
         break;
     }
-    case IrCmd::LEGACY_EXTRACT_VEC:
+    case IrCmd::EXTRACT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
-        build.vpshufps(inst.regX64, regOp(OP_A(inst)), regOp(OP_A(inst)), intOp(OP_B(inst)));
+        // Bitwise component access also accepts packed TValues; it does not perform arithmetic on the tag lane.
+        RegisterX64 source = regOp(OP_A(inst));
+        build.vpshufps(inst.regX64, source, source, intOp(OP_B(inst)));
         break;
     }
     case IrCmd::NOT_ANY:
@@ -1954,6 +2243,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         callWrap.addArgument(SizeX64::xmmword, memRegDoubleOp(OP_A(inst)), OP_A(inst));
         callWrap.addArgument(SizeX64::xmmword, memRegDoubleOp(OP_B(inst)), OP_B(inst));
         callWrap.addArgument(SizeX64::xmmword, memRegDoubleOp(OP_C(inst)), OP_C(inst));
+        if constexpr (LUA_VECTOR_SIZE == 4)
+            callWrap.addArgument(SizeX64::xmmword, HAS_OP_D(inst) ? memRegDoubleOp(OP_D(inst)) : build.f64(0.0), OPT_OP_D(inst));
         callWrap.call(qword[rNativeContext + offsetof(NativeContext, newVector)]);
         inst.regX64 = regs.takeReg(rax, index);
         break;
@@ -2020,7 +2311,40 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.vcvtsd2ss(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)));
         break;
-    case IrCmd::LEGACY_FLOAT_TO_VEC:
+    case IrCmd::BUILD_VEC:
+    {
+        CODEGEN_ASSERT(LUA_VECTOR_DOUBLE == 0);
+        // Keep every scalar input intact, including repeated inputs and inputs restored below.
+        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+        build.vxorpd(inst.regX64, inst.regX64, inst.regX64);
+
+        ScopedRegX64 bits{regs};
+        auto insertComponent = [&](IrOp op, uint8_t lane)
+        {
+            if (op.kind == IrOpKind::Constant)
+            {
+                build.vpinsrd(inst.regX64, inst.regX64, build.f32(float(doubleOp(op))), lane);
+            }
+            else
+            {
+                CODEGEN_ASSERT(op.kind == IrOpKind::Inst);
+                CODEGEN_ASSERT(getCmdValueKind(function.instOp(op).cmd) == IrValueKind::Float);
+                if (bits.reg == noreg)
+                    bits.alloc(SizeX64::dword);
+                build.vpextrd(bits.reg, regOp(op), 0);
+                build.vpinsrd(inst.regX64, inst.regX64, bits.reg, lane);
+            }
+        };
+
+        insertComponent(OP_A(inst), 0);
+        insertComponent(OP_B(inst), 1);
+        insertComponent(OP_C(inst), 2);
+#if LUA_VECTOR_SIZE == 4
+        insertComponent(OP_D(inst), 3);
+#endif
+        break;
+    }
+    case IrCmd::FLOAT_TO_VEC:
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
 
         if (OP_A(inst).kind == IrOpKind::Constant)
@@ -2030,22 +2354,37 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             static_assert(sizeof(asU32) == sizeof(value), "Expecting float to be 32-bit");
             memcpy(&asU32, &value, sizeof(value));
 
-            build.vmovaps(inst.regX64, build.u32x4(asU32, asU32, asU32, 0));
+            build.vmovaps(inst.regX64, build.u32x4(asU32, asU32, asU32, LUA_VECTOR_SIZE == 4 ? asU32 : 0));
         }
         else
         {
             build.vpshufps(inst.regX64, regOp(OP_A(inst)), regOp(OP_A(inst)), 0b00'00'00'00);
         }
         break;
-    case IrCmd::LEGACY_TAG_VECTOR:
+    case IrCmd::TVALUE_TO_VEC:
+    {
+        CODEGEN_ASSERT(getCmdValueKind(function.instOp(OP_A(inst)).cmd) == IrValueKind::Tvalue);
+        RegisterX64 source = regOp(OP_A(inst));
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vpinsrd(inst.regX64, regOp(OP_A(inst)), build.i32(LUA_TVECTOR), 3);
+        if (inst.regX64 != source)
+            build.vmovaps(inst.regX64, source);
         break;
-    case IrCmd::LEGACY_UNTAG_VECTOR:
+    }
+    case IrCmd::TAG_VECTOR:
+    {
+        IrValueKind kind = getCmdValueKind(function.instOp(OP_A(inst)).cmd);
+        CODEGEN_ASSERT(kind == IrValueKind::Vector || kind == IrValueKind::Tvalue);
+        RegisterX64 source = kind == IrValueKind::Vector ? rawVectorRegOp(OP_A(inst)) : regOp(OP_A(inst));
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
-
-        build.vandps(inst.regX64, regOp(OP_A(inst)), vectorAndMaskOp());
+        if constexpr (sizeof(TValue) == 16)
+            build.vpinsrd(inst.regX64, source, build.i32(LUA_TVECTOR), 3);
+        else if (inst.regX64 != source)
+            build.vmovaps(inst.regX64, source);
+        break;
+    }
+    case IrCmd::UNTAG_VECTOR:
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
+        build.vandps(inst.regX64, regOp(OP_A(inst)), build.u32x4(~0u, ~0u, ~0u, 0));
         break;
     case IrCmd::TRUNCATE_UINT:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::dword, index, {OP_A(inst)});
@@ -2065,7 +2404,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else if (OP_B(inst).kind == IrOpKind::Inst)
         {
             build.mov(dwordReg(tmp.reg), regOp(OP_B(inst)));
-            build.shl(tmp.reg, kTValueSizeLog2);
+            scaleTValueIndex(build, tmp.reg);
             build.lea(tmp.reg, addr[rBase + tmp.reg + vmRegOp(OP_A(inst)) * sizeof(TValue)]);
             build.mov(qword[rState + offsetof(lua_State, top)], tmp.reg);
         }
@@ -2106,11 +2445,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
             build.mov(argsAlt.reg, qword[rState + offsetof(lua_State, top)]);
 
-            build.vmovups(tmp.reg, luauReg(vmRegOp(OP_D(inst))));
-            build.vmovups(xmmword[argsAlt.reg], tmp.reg);
-
-            build.vmovups(tmp.reg, luauReg(vmRegOp(OP_E(inst))));
-            build.vmovups(xmmword[argsAlt.reg + sizeof(TValue)], tmp.reg);
+            copyTValue(build, tmp.reg, xmmword[argsAlt.reg], luauReg(vmRegOp(OP_D(inst))));
+            copyTValue(build, tmp.reg, xmmword[argsAlt.reg + sizeof(TValue)], luauReg(vmRegOp(OP_E(inst))));
         }
         else
         {
@@ -2147,7 +2483,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.mov(reg, qword[rState + offsetof(lua_State, top)]);
             build.lea(tmp.reg, addr[rBase + (ra + 1) * sizeof(TValue)]);
             build.sub(reg, tmp.reg);
-            build.shr(reg, kTValueSizeLog2);
+            unscaleTValueBytes(build, reg);
 
             callWrap.addArgument(SizeX64::dword, dwordReg(reg));
         }
@@ -2300,8 +2636,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         ScopedRegX64 tmp1{regs, SizeX64::xmmword};
 
-        build.vmovups(tmp1.reg, luauConstant(vmConstOp(OP_B(inst))));
-        build.vmovups(luauReg(vmRegOp(OP_A(inst))), tmp1.reg);
+        copyTValue(build, tmp1.reg, luauReg(vmRegOp(OP_A(inst))), luauConstant(vmConstOp(OP_B(inst))));
         build.setLabel(exit);
         break;
     }
@@ -2317,26 +2652,32 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
     {
-        inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+        bool addressOnly = inst.cmd == IrCmd::GET_UPVALUE_ADDR;
+        inst.regX64 = regs.allocReg(addressOnly ? SizeX64::qword : SizeX64::xmmword, index);
 
-        ScopedRegX64 tmp1{regs, SizeX64::qword};
+        ScopedRegX64 tmp{regs};
+        if (!addressOnly)
+            tmp.alloc(SizeX64::qword);
+        RegisterX64 address = addressOnly ? inst.regX64 : tmp.reg;
 
-        build.mov(tmp1.reg, sClosure);
-        build.add(tmp1.reg, offsetof(Closure, l.uprefs) + sizeof(TValue) * vmUpvalueOp(OP_A(inst)));
+        build.mov(address, sClosure);
+        build.add(address, offsetof(Closure, l.uprefs) + sizeof(TValue) * vmUpvalueOp(OP_A(inst)));
 
         // uprefs[] is either an actual value, or it points to UpVal object which has a pointer to value
         Label skip;
-        build.cmp(dword[tmp1.reg + offsetof(TValue, tt)], LUA_TUPVAL);
+        build.cmp(dword[address + offsetof(TValue, tt)], LUA_TUPVAL);
         build.jcc(ConditionX64::NotEqual, skip);
 
         // UpVal.v points to the value (either on stack, or on heap inside each UpVal, but we can deref it unconditionally)
-        build.mov(tmp1.reg, qword[tmp1.reg + offsetof(TValue, value.gc)]);
-        build.mov(tmp1.reg, qword[tmp1.reg + offsetof(UpVal, v)]);
+        build.mov(address, qword[address + offsetof(TValue, value.gc)]);
+        build.mov(address, qword[address + offsetof(UpVal, v)]);
 
         build.setLabel(skip);
 
-        build.vmovups(inst.regX64, xmmword[tmp1.reg]);
+        if (!addressOnly)
+            build.vmovups(inst.regX64, xmmword[address]);
         break;
     }
     case IrCmd::SET_UPVALUE:
@@ -2350,12 +2691,27 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.mov(tmp1.reg, qword[tmp2.reg + offsetof(UpVal, v)]);
         build.vmovups(xmmword[tmp1.reg], regOp(OP_B(inst)));
 
+        if constexpr (sizeof(TValue) > 16)
+        {
+            if (OP_C(inst).kind == IrOpKind::Constant)
+                build.mov(dword[tmp1.reg + offsetof(TValue, tt)], tagOp(OP_C(inst)));
+            else if (OP_C(inst).kind == IrOpKind::Inst)
+                build.mov(dword[tmp1.reg + offsetof(TValue, tt)], regOp(OP_C(inst)));
+        }
+
         tmp1.free();
 
-        if (OP_C(inst).kind == IrOpKind::Undef || isGCO(tagOp(OP_C(inst))))
+        if (OP_C(inst).kind != IrOpKind::Constant || isGCO(tagOp(OP_C(inst))))
         {
+            IrOp barrierValue = HAS_OP_D(inst) ? OP_D(inst) : OP_B(inst);
             callBarrierObject(
-                regs, build, tmp2.release(), {}, regOp(OP_B(inst)), OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst))
+                regs,
+                build,
+                tmp2.release(),
+                {},
+                HAS_OP_D(inst) ? noreg : regOp(OP_B(inst)),
+                barrierValue,
+                OP_C(inst).kind == IrOpKind::Constant ? tagOp(OP_C(inst)) : -1
             );
         }
         break;
@@ -3335,7 +3691,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         storeFloat(dword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)))], OP_C(inst));
         break;
 
-    case IrCmd::LEGACY_BUFFER_READVECTOR:
+    case IrCmd::BUFFER_READVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_D(inst)) == 2 || intOp(OP_D(inst)) == 3);
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
@@ -3348,7 +3704,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+    case IrCmd::BUFFER_WRITEVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_E(inst)) == 2 || intOp(OP_E(inst)) == 3);
         RegisterX64 value = regOp(OP_C(inst));
@@ -3913,6 +4269,7 @@ void IrLoweringX64::startBlock(const IrBlock& curr)
             regs.setupExitSyncEntry(function.getBlockIndex(curr));
         }
     }
+    regs.beginBlock();
 }
 
 void IrLoweringX64::finishBlock(const IrBlock& curr, const IrBlock& next)
@@ -4307,7 +4664,7 @@ OperandX64 IrLoweringX64::bufferAddrOp(IrOp bufferOp, IrOp indexOp, uint8_t tag)
     return noreg;
 }
 
-RegisterX64 IrLoweringX64::vecOp(IrOp op, ScopedRegX64& tmp)
+RegisterX64 IrLoweringX64::legacyVecOp(IrOp op, ScopedRegX64& tmp)
 {
     IrInst source = function.instOp(op);
     CODEGEN_ASSERT(source.cmd != IrCmd::SUBSTITUTE); // we don't process substitutions
@@ -4319,8 +4676,18 @@ RegisterX64 IrLoweringX64::vecOp(IrOp op, ScopedRegX64& tmp)
         return regOp(op);
 
     tmp.alloc(SizeX64::xmmword);
-    build.vandps(tmp.reg, regOp(op), vectorAndMaskOp());
+    build.vandps(tmp.reg, regOp(op), build.u32x4(~0u, ~0u, ~0u, 0));
     return tmp.reg;
+}
+
+RegisterX64 IrLoweringX64::rawVectorRegOp(IrOp op)
+{
+    return regs.getRawVectorReg(function.instOp(op));
+}
+
+RegisterX64 IrLoweringX64::numericVectorRegOp(IrOp op)
+{
+    return regs.getNumericVectorReg(function.instOp(op));
 }
 
 IrConst IrLoweringX64::constOp(IrOp op) const
@@ -4366,14 +4733,6 @@ IrBlock& IrLoweringX64::blockOp(IrOp op) const
 Label& IrLoweringX64::labelOp(IrOp op) const
 {
     return blockOp(op).label;
-}
-
-OperandX64 IrLoweringX64::vectorAndMaskOp()
-{
-    if (vectorAndMask.base == noreg)
-        vectorAndMask = build.u32x4(~0u, ~0u, ~0u, 0);
-
-    return vectorAndMask;
 }
 
 } // namespace X64
