@@ -2560,7 +2560,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         ScopedRegX64 tmp{regs, SizeX64::qword};
 
         // Check if node key tag is a string
-        build.mov(dwordReg(tmp.reg), luauNodeKeyTag(regOp(OP_A(inst))));
+        build.mov(dwordReg(tmp.reg), luauNodeKeyTagOperand(regOp(OP_A(inst))));
         build.and_(dwordReg(tmp.reg), kTKeyTagMask);
         build.cmp(dwordReg(tmp.reg), LUA_TSTRING);
         build.jcc(ConditionX64::NotEqual, mismatch);

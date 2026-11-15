@@ -397,6 +397,11 @@ void SharedCodeGenContext::onDestroyFunction(void* execdata) noexcept
     void* allocationCallbackContext
 )
 {
+#if defined(LUAU_T24_PACKED_NODE)
+    // Do not rely on the debug-only context assertion for this research ABI.
+    if (!isSupported())
+        return {};
+#endif
     UniqueSharedCodeGenContext codeGenContext{new SharedCodeGenContext{blockSize, maxTotalSize, nullptr, nullptr}};
 
     if (!codeGenContext->initHeaderFunctions())
@@ -1092,6 +1097,10 @@ void create(lua_State* L, AllocationCallback* allocationCallback, void* allocati
 
 void create(lua_State* L, size_t blockSize, size_t maxTotalSize, AllocationCallback* allocationCallback, void* allocationCallbackContext)
 {
+#if defined(LUAU_T24_PACKED_NODE)
+    if (!isSupported())
+        return;
+#endif
     std::unique_ptr<StandaloneCodeGenContext> codeGenContext =
         std::make_unique<StandaloneCodeGenContext>(blockSize, maxTotalSize, allocationCallback, allocationCallbackContext);
 
@@ -1109,6 +1118,10 @@ void create(lua_State* L, size_t blockSize, size_t maxTotalSize, AllocationCallb
 
 void create(lua_State* L, SharedCodeGenContext* codeGenContext)
 {
+#if defined(LUAU_T24_PACKED_NODE)
+    if (!isSupported() || !codeGenContext)
+        return;
+#endif
     if (FFlag::LuauCodegenRuntimeFeedback)
     {
         // Reserve VM data

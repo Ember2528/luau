@@ -155,7 +155,7 @@ inline OperandX64 luauNodeKeyValue(RegisterX64 node)
 }
 
 // Note: tag has dirty upper bits
-inline OperandX64 luauNodeKeyTag(RegisterX64 node)
+inline OperandX64 luauNodeKeyTagOperand(RegisterX64 node)
 {
     return dword[node + LUAU_NODE_KEY_TAG_NEXT_OFFSET];
 }

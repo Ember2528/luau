@@ -436,9 +436,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.ldr(temp1w, tempAddr(OP_C(inst), LUAU_TVALUE_EXTRA_OFFSET + sizeof(int), temp1));
             build.bic(temp2, temp1w, temp2);
             build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
-            if constexpr (sizeof(LuaNode) == 48)
+            if constexpr (sizeof(LuaNode) == 40)
+                build.add(temp2x, temp2x, temp2x, 2);
+            else if constexpr (sizeof(LuaNode) == 48)
                 build.add(temp2x, temp2x, temp2x, 1);
-            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 40 ? 3 : sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
             build.b(done);
             build.setLabel(small);
 
@@ -452,9 +454,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.ldrb(temp2, mem(regOp(OP_A(inst)), offsetof(LuaTable, nodemask8)));
             build.and_(temp2, temp2, temp1w, -24);
             build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
-            if constexpr (sizeof(LuaNode) == 48)
+            if constexpr (sizeof(LuaNode) == 40)
+                build.add(temp2x, temp2x, temp2x, 2);
+            else if constexpr (sizeof(LuaNode) == 48)
                 build.add(temp2x, temp2x, temp2x, 1);
-            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 40 ? 3 : sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
             build.setLabel(done);
             break;
         }
@@ -476,9 +480,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         // note: this may clobber OP_A(inst), so it's important that we don't use it after this
         build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
-        if constexpr (sizeof(LuaNode) == 48)
+        if constexpr (sizeof(LuaNode) == 40)
+            build.add(temp2x, temp2x, temp2x, 2);
+        else if constexpr (sizeof(LuaNode) == 48)
             build.add(temp2x, temp2x, temp2x, 1);
-        build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+        build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 40 ? 3 : sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
         break;
     }
     case IrCmd::GET_HASH_NODE_ADDR:
@@ -497,9 +503,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         // note: this may clobber OP_A(inst), so it's important that we don't use it after this
         build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
-        if constexpr (sizeof(LuaNode) == 48)
+        if constexpr (sizeof(LuaNode) == 40)
+            build.add(temp2x, temp2x, temp2x, 2);
+        else if constexpr (sizeof(LuaNode) == 48)
             build.add(temp2x, temp2x, temp2x, 1);
-        build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+        build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 40 ? 3 : sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
         break;
     }
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
