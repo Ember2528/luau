@@ -72,6 +72,7 @@ inline int countrz(uint64_t n)
 
 inline int lrotate(uint32_t u, int s)
 {
+    s &= 31;
     // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
     return _rotl(u, s);
@@ -82,6 +83,7 @@ inline int lrotate(uint32_t u, int s)
 
 inline int rrotate(uint32_t u, int s)
 {
+    s &= 31;
     // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
     return _rotr(u, s);
