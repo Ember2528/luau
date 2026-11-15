@@ -71,14 +71,23 @@ TEST_CASE("CodeAllocationCallbacks")
 
 TEST_CASE("CodeAllocationFailure")
 {
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    size_t blockSize = CodeAllocator::alignToPageSize(3000);
+    size_t maxTotalSize = blockSize * 2;
+#else
     size_t blockSize = 3000;
     size_t maxTotalSize = 7000;
+#endif
     CodeAllocator allocator(blockSize, maxTotalSize);
 
     std::vector<uint8_t> code;
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    code.resize(maxTotalSize + 1);
+#else
     code.resize(4000);
+#endif
 
-    // allocation has to fit in a block
+    // Allocation must fit the selected block/module policy and total budget.
     CodeAllocationData result1 = allocator.allocate(nullptr, 0, code.data(), code.size());
     REQUIRE(!result1.start);
 
@@ -94,6 +103,34 @@ TEST_CASE("CodeAllocationFailure")
     allocator.deallocate(result2);
     allocator.deallocate(result3);
 }
+
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+TEST_CASE("T24LargeCodeAllocationInterleavesOrdinaryBlocks")
+{
+    const size_t pageSize = CodeAllocator::alignToPageSize(1);
+    const size_t blockSize = pageSize * 2;
+    CodeAllocator allocator(blockSize, blockSize * 4);
+    std::vector<uint8_t> smallCode(128, 0x5a);
+    std::vector<uint8_t> largeCode(blockSize * 2 + 128, 0xa5);
+
+    CodeAllocationData first = allocator.allocate(nullptr, 0, smallCode.data(), smallCode.size());
+    CodeAllocationData large = allocator.allocate(nullptr, 0, largeCode.data(), largeCode.size());
+    CodeAllocationData last = allocator.allocate(nullptr, 0, smallCode.data(), smallCode.size());
+    REQUIRE(first.start);
+    REQUIRE(large.start);
+    REQUIRE(last.start);
+    CHECK(large.allocationSize > blockSize);
+    CHECK(memcmp(large.codeStart, largeCode.data(), largeCode.size()) == 0);
+    // A dedicated module must preserve the ordinary tail and honor the budget.
+    CHECK(last.allocationStart == first.allocationStart + pageSize);
+    CHECK_FALSE(allocator.allocate(nullptr, 0, largeCode.data(), largeCode.size()).start);
+
+    allocator.deallocate(first);
+    allocator.deallocate(large);
+    allocator.deallocate(last);
+}
+
+#endif
 
 TEST_CASE("CodeAllocationProtectData")
 {
@@ -379,6 +416,12 @@ TEST_CASE("GeneratedCodeExecutionWithThrowX64")
     unwind->finishInfo();
 
     size_t blockSize = 1024 * 1024;
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    // Exercise real unwind registration and exception propagation through a
+    // dedicated module, not only the ordinary allocator block.
+    blockSize = CodeAllocator::alignToPageSize(1);
+    build.code.resize(blockSize + 17, 0x90);
+#endif
     size_t maxTotalSize = 1024 * 1024;
     CodeAllocator allocator(blockSize, maxTotalSize);
 

@@ -51,6 +51,22 @@ private:
 
     bool allocateNewBlock(size_t& unwindInfoSize);
 
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    CodeAllocationData allocateLargeModule(const uint8_t* data, size_t dataSize, const uint8_t* code, size_t codeSize, size_t allocationSize);
+
+    struct LargeBlock
+    {
+        uint8_t* memory;
+        size_t size;
+        void* unwindInfo;
+    };
+
+    // Large modules own a dedicated block; they never replace the current
+    // ordinary block or change its allocation policy.
+    std::vector<LargeBlock> largeBlocks;
+    size_t allocatedPageBytes = 0;
+#endif
+
     uint8_t* allocatePages(size_t size) const;
     void freePages(uint8_t* mem, size_t size) const;
 

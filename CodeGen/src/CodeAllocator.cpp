@@ -3,6 +3,9 @@
 
 #include "Luau/CodeGenCommon.h"
 
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+#include <memory>
+#endif
 #include <string.h>
 
 #if defined(_WIN32)
@@ -144,6 +147,17 @@ namespace Luau
 namespace CodeGen
 {
 
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+static bool tryAlignToPageSize(size_t size, size_t& aligned)
+{
+    if (size > SIZE_MAX - (kPageSize - 1))
+        return false;
+
+    aligned = CodeAllocator::alignToPageSize(size);
+    return true;
+}
+#endif
+
 size_t CodeAllocator::alignToPageSize(size_t size)
 {
     return (size + kPageSize - 1) & ~(kPageSize - 1);
@@ -176,15 +190,53 @@ CodeAllocator::~CodeAllocator()
 
     for (uint8_t* block : blocks)
         freePages(block, blockSize);
+
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    for (const LargeBlock& block : largeBlocks)
+    {
+        if (block.unwindInfo && destroyBlockUnwindInfo)
+            destroyBlockUnwindInfo(context, block.unwindInfo);
+        freePages(block.memory, block.size);
+    }
+#endif
 }
 
 CodeAllocationData CodeAllocator::allocate(const uint8_t* data, size_t dataSize, const uint8_t* code, size_t codeSize)
 {
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    // Validate every addition/rounding used below before any pointer or data
+    // access. Reserve the same maximum unwind prefix as ordinary allocations.
+    size_t reservedDataSize;
+    size_t maximumUsedSize;
+    size_t requiredSize;
+    if ((dataSize == 0 && codeSize == 0) || dataSize > SIZE_MAX - kMaxReservedDataSize ||
+        !tryAlignToPageSize(kMaxReservedDataSize + dataSize, reservedDataSize) || codeSize > SIZE_MAX - reservedDataSize ||
+        !tryAlignToPageSize(reservedDataSize + codeSize, requiredSize))
+        return {};
+
+    maximumUsedSize = dataSize ? reservedDataSize + codeSize : kMaxReservedDataSize + codeSize;
+    if (maximumUsedSize > blockSize)
+    {
+        // Code-only modules do not need the data/code page split. The callback
+        // reservation still precedes their first instruction in this block.
+        if (dataSize == 0 && !tryAlignToPageSize(kMaxReservedDataSize + codeSize, requiredSize))
+            return {};
+        return allocateLargeModule(data, dataSize, code, codeSize, requiredSize);
+    }
+#endif
     size_t startOffset = 0;
     size_t codeOffset;
     size_t dataOffset;
     size_t pageAlignedSize;
     size_t totalSize;
+    auto availableSize = [&]()
+    {
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+        if (!blockPos)
+            return size_t(0);
+#endif
+        return size_t(blockEnd - blockPos);
+    };
 
     if (dataSize != 0)
     {
@@ -197,7 +249,7 @@ CodeAllocationData CodeAllocator::allocate(const uint8_t* data, size_t dataSize,
             return {};
 
         // We might need a new block
-        if (alignToPageSize(dataSize) + codeSize > size_t(blockEnd - blockPos))
+        if (alignToPageSize(dataSize) + codeSize > availableSize())
         {
             if (!allocateNewBlock(startOffset))
                 return {};
@@ -218,7 +270,7 @@ CodeAllocationData CodeAllocator::allocate(const uint8_t* data, size_t dataSize,
         if (totalSize > blockSize - kMaxReservedDataSize)
             return {};
 
-        if (totalSize > size_t(blockEnd - blockPos))
+        if (totalSize > availableSize())
         {
             if (!allocateNewBlock(startOffset))
                 return {};
@@ -283,6 +335,72 @@ CodeAllocationData CodeAllocator::allocate(const uint8_t* data, size_t dataSize,
     return result;
 }
 
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+CodeAllocationData CodeAllocator::allocateLargeModule(
+    const uint8_t* data, size_t dataSize, const uint8_t* code, size_t codeSize, size_t allocationSize
+)
+{
+    // Include actual mapped page sizes, not nominal ordinary-block sizes, and
+    // use subtraction so a caller-supplied limit cannot wrap the budget check.
+    if (allocationSize > maxTotalSize || allocatedPageBytes > maxTotalSize - allocationSize)
+        return {};
+
+    // Reserve bookkeeping before owning pages or registered unwind state.
+    largeBlocks.reserve(largeBlocks.size() + 1);
+    uint8_t* block = allocatePages(allocationSize);
+    if (!block)
+        return {};
+
+    size_t startOffset = 0;
+    void* unwindInfo = nullptr;
+    auto rollback = [&](uint8_t* memory)
+    {
+        if (unwindInfo && destroyBlockUnwindInfo)
+            destroyBlockUnwindInfo(context, unwindInfo);
+        freePages(memory, allocationSize);
+    };
+    std::unique_ptr<uint8_t, decltype(rollback)> pending(block, rollback);
+
+    if (createBlockUnwindInfo)
+        unwindInfo = createBlockUnwindInfo(context, block, allocationSize, startOffset);
+
+    if ((createBlockUnwindInfo && !unwindInfo) || startOffset > kMaxReservedDataSize)
+        return {};
+    startOffset = (startOffset + (kCodeAlignment - 1)) & ~(kCodeAlignment - 1);
+
+    size_t codeOffset = dataSize ? alignToPageSize(startOffset + dataSize) : startOffset;
+    size_t dataOffset = dataSize ? codeOffset - dataSize : startOffset;
+    size_t pageAlignedSize = alignToPageSize(codeOffset + codeSize);
+    CODEGEN_ASSERT(pageAlignedSize <= allocationSize);
+
+    if (dataSize)
+        memcpy(block + dataOffset, data, dataSize);
+    if (codeSize)
+        memcpy(block + codeOffset, code, codeSize);
+
+    // No writable/executable overlap: constants and code receive independent
+    // protections, exactly as in the ordinary-block path.
+    bool protectedPages = dataSize ? makePagesReadOnly(block, codeOffset) && makePagesExecutable(block + codeOffset, pageAlignedSize - codeOffset)
+                                   : makePagesExecutable(block, pageAlignedSize);
+    if (!protectedPages)
+        return {};
+
+    largeBlocks.push_back({block, allocationSize, unwindInfo});
+    pending.release();
+    allocatedPageBytes += allocationSize;
+    liveAllocations++;
+    flushInstructionCache(block + codeOffset, codeSize);
+
+    CodeAllocationData result;
+    result.start = block + startOffset;
+    result.size = codeOffset - startOffset + codeSize;
+    result.codeStart = block + codeOffset;
+    result.allocationStart = block;
+    result.allocationSize = allocationSize;
+    return result;
+}
+#endif
+
 void CodeAllocator::deallocate(CodeAllocationData codeAllocationData)
 {
     if (codeAllocationData.allocationStart == nullptr)
@@ -300,11 +418,50 @@ void CodeAllocator::deallocate(CodeAllocationData codeAllocationData)
 bool CodeAllocator::allocateNewBlock(size_t& unwindInfoSize)
 {
     // Stop allocating once we reach a global limit
+#if defined(LUAU_T24_LARGE_NATIVE_MODULE_RESEARCH)
+    size_t pageAlignedSize;
+    if (!tryAlignToPageSize(blockSize, pageAlignedSize) || pageAlignedSize > maxTotalSize ||
+        allocatedPageBytes > maxTotalSize - pageAlignedSize)
+        return false;
+
+    blocks.reserve(blocks.size() + 1);
+    if (createBlockUnwindInfo)
+        unwindInfos.reserve(unwindInfos.size() + 1);
+
+    uint8_t* block = allocatePages(blockSize);
+    if (!block)
+        return false;
+
+    void* unwindInfo = nullptr;
+    auto rollback = [&](uint8_t* memory)
+    {
+        if (unwindInfo && destroyBlockUnwindInfo)
+            destroyBlockUnwindInfo(context, unwindInfo);
+        freePages(memory, blockSize);
+    };
+    std::unique_ptr<uint8_t, decltype(rollback)> pending(block, rollback);
+
+    if (createBlockUnwindInfo)
+    {
+        unwindInfo = createBlockUnwindInfo(context, block, blockSize, unwindInfoSize);
+        if (!unwindInfo || unwindInfoSize > kMaxReservedDataSize)
+            return false;
+
+        unwindInfoSize = (unwindInfoSize + (kCodeAlignment - 1)) & ~(kCodeAlignment - 1);
+        unwindInfos.push_back(unwindInfo);
+    }
+
+    blocks.push_back(block);
+    pending.release();
+    blockPos = block;
+    blockEnd = block + blockSize;
+    allocatedPageBytes += pageAlignedSize;
+    return true;
+#else
     if ((blocks.size() + 1) * blockSize > maxTotalSize)
         return false;
 
     uint8_t* block = allocatePages(blockSize);
-
     if (!block)
         return false;
 
@@ -329,6 +486,7 @@ bool CodeAllocator::allocateNewBlock(size_t& unwindInfoSize)
     }
 
     return true;
+#endif
 }
 
 uint8_t* CodeAllocator::allocatePages(size_t size) const
