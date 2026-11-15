@@ -658,6 +658,10 @@ typedef struct TKey
 #endif
 } TKey;
 
+// Shared with bounded lazy-plane ownership: every table eligible for this
+// index can reserve its contiguous plane at allocation time.
+constexpr size_t kFrozenHashIndexMinimumCapacity = 64;
+
 #if defined(LUAU_T24_COMPACT_FROZEN_HASH_SKIP_RESEARCH) && (!defined(LUAU_T24_PACKED_NODE) || !defined(LUAU_T24_COMPACT_VECTOR_CACHE_RESEARCH))
 #error "Compact frozen index requires the compact cache plane"
 #endif
@@ -745,6 +749,17 @@ using TKeyRef = const TKey*;
 constexpr uint8_t kCompactNodePlaneOwnedMask = 1u << 4;
 #else
 #define LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE 0
+#endif
+#if defined(LUAU_T24_LAZY_PLANE_BOUNDED_RESEARCH)
+#if !LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+#error "Bounded lazy planes require lazy compact-plane ownership"
+#endif
+#define LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE 1
+// Match the frozen-index minimum. Eligible scalar tables already own a plane,
+// so successful freeze never needs an old+new node allocation peak.
+constexpr size_t kCompactNodePlaneEagerCapacity = kFrozenHashIndexMinimumCapacity;
+#else
+#define LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE 0
 #endif
 inline constexpr size_t luauNodeStorageBytes(size_t count, bool cache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE)
 {

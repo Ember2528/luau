@@ -727,6 +727,7 @@ static bool sameTableStorage(const LuaTable* t, const LuaNode* node, int nodeSiz
 // Allocate/copy/publish, rather than reallocating the published node block:
 // allocation callbacks and failure paths continue to see the complete old
 // table. No interior slot pointer may survive a successful promotion.
+#if !LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE
 static bool tryEnsureCompactNodeCache(lua_State* L, LuaTable* t)
 {
     while (!luauHasCompactNodeCache(t) && t->node != dummynode)
@@ -757,6 +758,7 @@ static bool tryEnsureCompactNodeCache(lua_State* L, LuaTable* t)
     return true;
 }
 #endif
+#endif
 
 static void setnodevector(lua_State* L, LuaTable* t, int size)
 {
@@ -773,7 +775,11 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         if (lsize > MAXBITS)
             luaG_runerror(L, "table overflow");
         size = twoto(lsize);
+#if LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE
+        bool withCache = size_t(size) >= kCompactNodePlaneEagerCapacity;
+#else
         constexpr bool withCache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && !LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE;
+#endif
         t->node = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1, withCache)), t->memcat));
         luauSetCompactNodeCacheOwned(t, withCache);
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
@@ -844,7 +850,11 @@ retry:
     bool oldHasCache = luauHasCompactNodeCache(t);
     bool newHasCache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE;
 #if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+#if LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE
+    newHasCache = wantVectorCache || size_t(nhsize) >= kCompactNodePlaneEagerCapacity;
+#else
     newHasCache = wantVectorCache;
+#endif
     // A cleared/deleted vector population can return to node-only backing on
     // its next resize. Stop at the first live vector in the common case.
     if (!newHasCache)
@@ -2027,10 +2037,14 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
         int sourceNodeSize = sizenode(tt);
         TValue* sourceArray = tt->array;
         int sourceArraySize = tt->sizearray;
-        bool withCache = luauHasCompactNodeCache(tt);
+        bool sourceHasCache = luauHasCompactNodeCache(tt);
+        bool withCache = sourceHasCache;
         int hashSize = sourceNode == dummynode ? 0 : sourceNodeSize;
+#if LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE
+        withCache = withCache || size_t(hashSize) >= kCompactNodePlaneEagerCapacity;
+#endif
         TValue* newarray = sourceArraySize ? luaM_newarray(L, sourceArraySize, TValue, t->memcat) : nullptr;
-        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, withCache))
+        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, sourceHasCache))
         {
             if (newarray)
                 luaM_freearray(L, newarray, sourceArraySize, TValue, t->memcat);
@@ -2048,7 +2062,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
                 luaD_throw(L, LUA_ERRMEM);
             }
         }
-        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, withCache))
+        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, sourceHasCache))
         {
             if (hashSize)
                 luaM_free_(L, newnode, luauNodeStorageBytes(hashSize, withCache), t->memcat);
@@ -2060,7 +2074,11 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
         if (newarray)
             memcpy(newarray, sourceArray, size_t(sourceArraySize) * sizeof(TValue));
         if (hashSize)
-            memcpy(newnode, sourceNode, luauNodeStorageBytes(hashSize, withCache));
+        {
+            memcpy(newnode, sourceNode, luauNodeStorageBytes(hashSize, sourceHasCache));
+            if (withCache && !sourceHasCache)
+                memset(luauCompactNodeCache(newnode, hashSize), 0, size_t(hashSize) * sizeof(uint32_t));
+        }
         t->metatable = tt->metatable;
         t->tmcache = tt->tmcache;
         t->array = newarray;
@@ -2142,7 +2160,7 @@ static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
     if (!t->readonly || t->metatable || (ttistable(registry(L)) && hvalue(registry(L)) == t))
         return;
     int size = sizenode(t);
-    if (size < 64)
+    if (size_t(size) < kFrozenHashIndexMinimumCapacity)
         return;
 #if defined(LUAU_T24_FROZEN_ADMISSION_STRATIFIED_RESEARCH)
     // Sampling is a bounded screen. Spread probes across 64 strata and keep
@@ -2177,9 +2195,17 @@ static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
             return;
 #endif
 #if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+#if LUAU_T24_LAZY_PLANE_BOUNDED_ACTIVE
+    // The capacity policy supplies every eligible table's plane up front.
+    // Keep a strict no-allocation freeze path even for an unexpected legacy
+    // unowned arena: skipping the optimization is always semantically safe.
+    if (!luauHasCompactNodeCache(t))
+        return;
+#else
     // Freeze is permitted to skip this optimization on allocation failure.
     if (!tryEnsureCompactNodeCache(L, t))
         return;
+#endif
     // Observers ran before the allocation was published. If they altered the
     // shape or admission contract, leave the index unpublished.
     if (sizenode(t) != size || !t->readonly || t->metatable ||
