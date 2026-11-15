@@ -13,6 +13,15 @@
 
 #include <string.h>
 
+#if defined(LUAU_T24_BOUNDED_RESET_STACK_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+#define LUAU_T24_BOUNDED_RESET_STACK 1
+LUAU_DYNAMIC_FASTINTVARIABLE(LuauBalancedResetStackLimit, 64)
+LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauBalancedResetClear, true)
+LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauBalancedResetAdaptive, true)
+#else
+#define LUAU_T24_BOUNDED_RESET_STACK 0
+#endif
+
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_FASTFLAGVARIABLE(LuauBufferCage)
 
@@ -168,11 +177,38 @@ void lua_resetthread(lua_State* L)
     L->base = L->ci->base;
     L->top = L->ci->base;
     L->nCcalls = L->baseCcalls = 0;
-    // clear thread stack
+    // Reset threads keep at most a small, dynamically bounded backing. This
+    // never grows an initially small stack and adds no per-thread bookkeeping.
+#if LUAU_T24_BOUNDED_RESET_STACK
+    constexpr int kMaxResetStackLimit = 256;
+    static_assert(BASIC_STACK_SIZE <= kMaxResetStackLimit, "reset retention clamp must cover the initial stack");
+    int resetLimit = DFInt::LuauBalancedResetStackLimit;
+    if (resetLimit < BASIC_STACK_SIZE)
+        resetLimit = BASIC_STACK_SIZE;
+    else if (resetLimit > kMaxResetStackLimit)
+        resetLimit = kMaxResetStackLimit;
+    // A much larger backing is a poor predictor of a recurring small frame.
+    // Drop it to the initial size; modest growth can still use the small cache.
+    // stacksize includes EXTRA_STACK while resetLimit counts usable slots.
+    // resetLimit is already clamped, so this threshold cannot overflow.
+    if (DFFlag::LuauBalancedResetAdaptive && L->stacksize > 2 * resetLimit + EXTRA_STACK)
+        resetLimit = BASIC_STACK_SIZE;
+    if (L->stacksize > resetLimit + EXTRA_STACK)
+        luaD_reallocstack(L, resetLimit, 0);
+
+    // The base function slot was already cleared. Clearing the small retained
+    // tail prevents old object graphs from becoming roots again if a later
+    // Lua/native frame exposes unused scratch slots. Keep deferred clearing as
+    // a same-binary research control using the existing popped-slot GC rule.
+    if (DFFlag::LuauBalancedResetClear)
+        for (int i = 1; i < L->stacksize; i++)
+            setnilvalue(L->stack + i);
+#else
     if (L->stacksize != BASIC_STACK_SIZE + EXTRA_STACK)
         luaD_reallocstack(L, BASIC_STACK_SIZE, 0);
     for (int i = 0; i < L->stacksize; i++)
         setnilvalue(L->stack + i);
+#endif
     L->finalizers = nullptr;
 }
 
