@@ -379,9 +379,23 @@ void callEpilogC(lua_State* L, int nresults, int n)
     StkId vali = L->top - n;
     StkId valend = L->top;
 
-    int i;
-    for (i = nresults; i != 0 && vali < valend; i--)
-        setobj2s(L, res++, vali++);
+    int i = nresults;
+#if defined(LUAU_T24_COPY_RETURNS_MULTRET_ONLY_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    int count = n;
+    // Leave fixed-result copying/padding on the original element loop.
+    if (nresults == LUA_MULTRET && count >= 8)
+    {
+        // Results can overlap their destination in the caller's stack frame.
+        memmove(res, vali, size_t(count) * sizeof(TValue));
+        for (int j = 0; j < count; ++j)
+            checkliveness(L->global, res + j);
+        res += count;
+        i -= count;
+    }
+    else
+#endif
+        for (; i != 0 && vali < valend; i--)
+            setobj2s(L, res++, vali++);
     while (i-- > 0)
         setnilvalue(res++);
 
@@ -1254,8 +1268,19 @@ void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, i
     VM_PROTECT(luaD_checkstack(L, n));
     StkId ra = VM_REG(rai); // previous call may change the stack
 
-    for (int j = 0; j < n; j++)
-        setobj2s(L, ra + j, base - n + j);
+#if defined(LUAU_T24_COPY_VARARGS_MULTRET_ONLY_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    if (n >= 8)
+    {
+        // Stack checking above may relocate base. Incoming varargs end at the
+        // restored base, while all destination registers are at/above base.
+        memcpy(ra, base - n, size_t(n) * sizeof(TValue));
+        for (int j = 0; j < n; ++j)
+            checkliveness(L->global, ra + j);
+    }
+    else
+#endif
+        for (int j = 0; j < n; j++)
+            setobj2s(L, ra + j, base - n + j);
 
     L->top = ra + n;
 }
