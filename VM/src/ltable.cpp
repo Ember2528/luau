@@ -1711,6 +1711,19 @@ static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
     int size = sizenode(t);
     if (size < 64)
         return;
+#if defined(LUAU_T24_FROZEN_ADMISSION_STRATIFIED_RESEARCH)
+    // Sampling is a bounded screen. Spread probes across 64 strata and keep
+    // slack around quarter occupancy; the exact count below owns admission.
+    int sampledLive = 0;
+    const int stride = size / 64;
+    for (int j = 0; j < 64; ++j)
+    {
+        int position = ((j * 17) & 63) * stride + ((j * 13 + 7) & (stride - 1));
+        sampledLive += !ttisnil(gval(gnode(t, position)));
+        if ((j == 15 && sampledLive > 12) || sampledLive > 24)
+            return;
+    }
+#else
     // Sampling only decides whether to attempt the index. A miss simply
     // leaves iteration on the normal scan; it never changes table contents.
     int sampledLive = 0;
@@ -1719,6 +1732,7 @@ static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
             sampledLive += !ttisnil(gval(gnode(t, quarter * (size / 4) + j)));
     if (sampledLive > 4)
         return;
+#endif
 
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     // Do not destroy key-owned hashes if admission is rejected after sampling.
