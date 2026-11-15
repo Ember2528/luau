@@ -412,7 +412,7 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            unsigned s = unsigned(int(args[1].valueNumber)) & 31;
 
             return cnum(double((u << (s & 31)) | (u >> ((32 - s) & 31))));
         }
@@ -451,7 +451,7 @@ Constant foldBuiltin(AstNameTable& stringTable, int bfid, const Constant* args, 
         if (count == 2 && args[0].type == Constant::Type_Number && args[1].type == Constant::Type_Number)
         {
             uint32_t u = bit32(args[0].valueNumber);
-            int s = int(args[1].valueNumber);
+            unsigned s = unsigned(int(args[1].valueNumber)) & 31;
 
             return cnum(double((u >> (s & 31)) | (u << ((32 - s) & 31))));
         }

@@ -98,6 +98,19 @@ assert(bit32.arshift(noinline(-1), 24) == 0xffffffff)
 assert(bit32.arshift(noinline(-1), 32) == 0xffffffff)
 assert(bit32.arshift(noinline(-1), -1) == (-1 * 2) % 2^32)
 
+-- Extreme counts cover folding, fastcalls, and ordinary library calls.
+assert(bit32.lrotate(0x89abcdef, -2147483647) == 0x13579bdf)
+assert(bit32.rrotate(0x89abcdef, -2147483647) == 0xc4d5e6f7)
+local distance = noinline(-2147483648)
+assert(bit32.lrotate(0x89abcdef, distance) == 0x89abcdef)
+assert(bit32.rrotate(0x89abcdef, distance) == 0x89abcdef)
+for _, shift in {bit32.lshift, bit32.rshift, bit32.arshift} do
+  assert(shift(0x89abcdef, distance) == 0)
+end
+for _, rotate in {bit32.lrotate, bit32.rrotate} do
+  assert(rotate(0x89abcdef, distance) == 0x89abcdef)
+end
+
 print("+")
 -- some special cases
 local c = {0, 1, 2, 3, 10, 0x80000000, 0xaaaaaaaa, 0x55555555,

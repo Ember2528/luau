@@ -70,12 +70,11 @@ static int b_shift(lua_State* L, b_uint r, int i)
 {
     if (i < 0)
     { // shift right?
-        i = -i;
         r = trim(r);
-        if (i >= NBITS)
+        if (i <= -NBITS)
             r = 0;
         else
-            r >>= i;
+            r >>= -i;
     }
     else
     { // shift left
@@ -96,7 +95,10 @@ static int b_lshift(lua_State* L)
 
 static int b_rshift(lua_State* L)
 {
-    return b_shift(L, luaL_checkunsigned(L, 1), -luaL_checkinteger(L, 2));
+    b_uint r = luaL_checkunsigned(L, 1);
+    int i = luaL_checkinteger(L, 2);
+    // Larger negative distances already shift every bit out; clamp before negation.
+    return b_shift(L, r, i < -NBITS ? NBITS : -i);
 }
 
 static int b_arshift(lua_State* L)
@@ -104,7 +106,7 @@ static int b_arshift(lua_State* L)
     b_uint r = luaL_checkunsigned(L, 1);
     int i = luaL_checkinteger(L, 2);
     if (i < 0 || !(r & ((b_uint)1 << (NBITS - 1))))
-        return b_shift(L, r, -i);
+        return b_shift(L, r, i < -NBITS ? NBITS : -i);
     else
     { // arithmetic shift for 'negative' number
         if (i >= NBITS)
@@ -116,7 +118,7 @@ static int b_arshift(lua_State* L)
     }
 }
 
-static int b_rot(lua_State* L, int i)
+static int b_rot(lua_State* L, unsigned i)
 {
     b_uint r = luaL_checkunsigned(L, 1);
     i &= (NBITS - 1); // i = i % NBITS
@@ -134,7 +136,8 @@ static int b_lrot(lua_State* L)
 
 static int b_rrot(lua_State* L)
 {
-    return b_rot(L, -luaL_checkinteger(L, 2));
+    // Unsigned negation preserves the rotation modulo NBITS, including INT_MIN.
+    return b_rot(L, 0u - unsigned(luaL_checkinteger(L, 2)));
 }
 
 /*

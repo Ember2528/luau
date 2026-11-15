@@ -1266,6 +1266,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorRandomProp")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: vector)
@@ -1650,6 +1652,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLibraryChain")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenMultiLaneDot{FFlag::LuauCodegenMultiLaneDot, true};
 
     ensureVectorFloat();
@@ -1790,6 +1794,8 @@ bb_linear_11:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed2")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     assemblyOptions.includeOutlinedCode = true;
@@ -5917,6 +5923,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesConstantRange")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -8577,6 +8585,8 @@ bb_fallback_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "RuntimeFeedbackCounters")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodeGenRuntimeFeedback{FFlag::LuauCodegenRuntimeFeedback, true};
 
     assemblyOptions.compilationOptions.runtimeFeedback = true;
@@ -8615,6 +8625,8 @@ bb_fallback_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UserdataDirectNamecall")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenUserdataDirect{FFlag::LuauCodegenUserdataDirect, true};
 
     if (!Luau::CodeGen::isSupported())

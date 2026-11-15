@@ -649,7 +649,7 @@ static int luauF_lrotate(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        unsigned s = unsigned(int(a2)) & 31;
 
         // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
@@ -742,7 +742,7 @@ static int luauF_rrotate(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
         unsigned u;
         luai_num2unsigned(u, a1);
-        int s = int(a2);
+        unsigned s = unsigned(int(a2)) & 31;
 
         // MSVC doesn't recognize the rotate form that is UB-safe
 #ifdef _MSC_VER
