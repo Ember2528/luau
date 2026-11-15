@@ -150,6 +150,53 @@ public:
 
 TEST_SUITE_BEGIN("Optimization");
 
+TEST_CASE_FIXTURE(IrBuilderFixture, "T24ExplicitUpvalueUsesActualCheckedTag")
+{
+    if (!kVectorSize4)
+        return; // An independently supplied upvalue tag is a wide-layout case.
+
+    bool actualCollectable = false;
+    SUBCASE("NumberPayloadTableTag") { actualCollectable = true; }
+    SUBCASE("TablePayloadNumberTag") {}
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    if (actualCollectable)
+    {
+        build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(3.0));
+        build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
+    }
+    else
+    {
+        build.inst(IrCmd::STORE_POINTER, build.vmReg(0), build.inst(IrCmd::LOAD_POINTER, build.vmReg(5)));
+        build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(ttable));
+    }
+    int actualTag = actualCollectable ? ttable : tnumber;
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(1));
+    build.inst(IrCmd::CHECK_TAG, tag, build.constTag(actualTag), build.vmExit(0));
+    IrOp payload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
+    IrOp sourceStore = build.inst(IrCmd::STORE_TVALUE, build.vmReg(2), payload, build.constInt(0), tag);
+    IrOp upvalueStore = build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), payload, tag, build.vmReg(2));
+    IrOp nextPayload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(3));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(2), nextPayload, build.constInt(0), build.inst(IrCmd::LOAD_TAG, build.vmReg(3)));
+    build.inst(IrCmd::RETURN, build.vmReg(2), build.constInt(1));
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+    markDeadStoresInBlockChains(build);
+
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH)
+    if (kVectorSize4)
+    {
+        CHECK(OP_C(build.function.instOp(upvalueStore)) == build.constTag(actualTag));
+        CHECK(OPT_OP_D(build.function.instOp(upvalueStore)) == (actualCollectable ? build.vmReg(2) : IrOp{}));
+        CHECK(build.function.instOp(sourceStore).cmd == (actualCollectable ? IrCmd::STORE_TVALUE : IrCmd::NOP));
+    }
+#endif
+    // The payload's tag must never override the separately checked actual tag.
+    if (actualCollectable)
+        CHECK(OPT_OP_D(build.function.instOp(upvalueStore)) == build.vmReg(2));
+}
+
 TEST_CASE_FIXTURE(IrBuilderFixture, "FinalX64OptCheckTag")
 {
     IrOp block = build.block(IrBlockKind::Internal);

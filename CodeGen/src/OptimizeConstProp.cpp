@@ -91,6 +91,7 @@ struct NodeSlotState
     bool knownToNotBeNil;
 };
 
+
 static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
 {
     if (name == "nil")
@@ -441,6 +442,32 @@ struct ConstPropState
         RegisterLink* tagLink = tryGetRegLink(tagOp);
         return valueLink && tagLink && valueLink->reg == tagLink->reg && valueLink->version == tagLink->version;
     }
+
+
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH) || defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+    // This is a payload fact, not a tag inference.  An explicit store tag is
+    // authoritative even when it disagrees with the source TValue's tag.
+    IrOp tryGetTValuePayload(IrOp value)
+    {
+        IrOp result = tryGetValue(value);
+        if (result.kind == IrOpKind::None && value.kind == IrOpKind::Inst)
+            if (IrOp* known = instValue.find(value.index))
+                result = *known;
+        return result;
+    }
+
+    bool payloadMatchesScalarTag(IrOp value, uint8_t tag)
+    {
+        IrValueKind kind = IrValueKind::None;
+        if (IrInst* inst = function.asInstOp(value))
+            kind = getCmdValueKind(inst->cmd);
+        else if (value.kind == IrOpKind::Constant)
+            kind = getConstValueKind(function.constOp(value));
+
+        return (tag == LUA_TBOOLEAN && kind == IrValueKind::Int) || (tag == LUA_TNUMBER && kind == IrValueKind::Double) ||
+               (isGCO(tag) && kind == IrValueKind::Pointer);
+    }
+#endif
 
     // Attach register version number to the register operand in a load instruction
     // This is used to allow instructions with register references to be compared for equality
@@ -1355,6 +1382,7 @@ struct ConstPropState
         }
     }
 
+
     // Used to compute the pressure of the cached value 'set' on the spill registers
     // We want to find out the maximum live range intersection count between the cached value at 'slot' and current instruction
     // Note that this pressure is approximate, as some values that might have been live at one point could have been marked dead later
@@ -1463,6 +1491,7 @@ struct ConstPropState
     // Stored the tag of a TValue stored in an instruction and will never change
     DenseHashMap<uint32_t, uint8_t> instTag;
     DenseHashMap<uint32_t, IrOp> instValue;
+
 
     DenseHashMap<IrInst, uint32_t, IrInstHash, IrInstEq> valueMap;
 
@@ -1631,6 +1660,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
 static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction& function, IrBlock& block, IrInst& inst, uint32_t index)
 {
     state.instPos++;
+
 
     switch (inst.cmd)
     {
@@ -2053,6 +2083,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.trackVectorStore(inst);
         break;
     case IrCmd::STORE_TVALUE:
+    {
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             // A copied vector result still has semantic components. Generic
@@ -2067,15 +2098,52 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 break;
             }
         }
+        bool explicitScalarFacts = false;
+        bool explicitSameTvalue = HAS_OP_D(inst) && state.valueHasSameTag(OP_B(inst), OP_D(inst));
+        IrOp explicitValue;
+        IrCmd explicitLoadCmd = IrCmd::NOP;
+        uint32_t explicitLoadValue = kInvalidInstIdx;
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH) || defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+        if (HAS_OP_D(inst) && function.asTagOp(OP_D(inst)))
+        {
+            bool destinationEnabled = false;
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH)
+            destinationEnabled |= OP_A(inst).kind == IrOpKind::VmReg &&
+                                  (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0);
+#endif
+            if (destinationEnabled)
+            {
+                explicitScalarFacts = true;
+                uint8_t tag = function.tagOp(OP_D(inst));
+                explicitValue = state.tryGetTValuePayload(OP_B(inst));
+
+                // Gather source facts before invalidating the destination:
+                // the source and destination may be the very same VM register.
+                if (explicitValue.kind == IrOpKind::None && state.tryGetRegLink(OP_B(inst)))
+                    if (IrInst* value = function.asInstOp(OP_B(inst)); value && value->cmd == IrCmd::LOAD_TVALUE &&
+                        OP_A(value).kind == IrOpKind::VmReg)
+                    {
+                        std::tie(explicitLoadCmd, explicitLoadValue) = state.getPreviousVersionedLoadForTag(tag, OP_A(value));
+                        if (explicitLoadValue != kInvalidInstIdx)
+                            explicitValue = IrOp{IrOpKind::Inst, explicitLoadValue};
+                    }
+
+                if (explicitValue.kind == IrOpKind::Inst && state.payloadMatchesScalarTag(explicitValue, tag))
+                {
+                    explicitLoadCmd = tag == LUA_TBOOLEAN ? IrCmd::LOAD_INT : tag == LUA_TNUMBER ? IrCmd::LOAD_DOUBLE : IrCmd::LOAD_POINTER;
+                    explicitLoadValue = explicitValue.index;
+                }
+            }
+        }
+#endif
         // D normally overrides the stored tag independently of payload B.
         // Only forward a complete TValue when we can prove they agree.
-        if (HAS_OP_D(inst))
+        if (HAS_OP_D(inst) && !explicitScalarFacts)
         {
             if (OP_A(inst).kind == IrOpKind::VmReg)
             {
                 std::optional<uint8_t> tag = function.asTagOp(OP_D(inst));
-                bool sameTvalue = (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0) &&
-                                  state.valueHasSameTag(OP_B(inst), OP_D(inst));
+                bool sameTvalue = (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0) && explicitSameTvalue;
 
                 // Avoid invalidating a version before checking whether this is
                 // a write-back of the very same value and tag.
@@ -2108,7 +2176,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             if (OP_A(inst).kind == IrOpKind::VmReg)
             {
-                if (OP_B(inst).kind == IrOpKind::Inst)
+                if (OP_B(inst).kind == IrOpKind::Inst && (!HAS_OP_D(inst) || explicitSameTvalue))
                 {
                     if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(inst)))
                     {
@@ -2126,25 +2194,25 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 state.invalidate(OP_A(inst));
             }
 
-            uint8_t tag = state.tryGetTag(OP_B(inst));
+            uint8_t tag = explicitScalarFacts ? function.tagOp(OP_D(inst)) : state.tryGetTag(OP_B(inst));
 
             // We know the tag of some instructions that result in TValue
             if (tag == 0xff)
                 tag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
 
-            IrOp value = state.tryGetValue(OP_B(inst));
+            IrOp value = explicitScalarFacts ? explicitValue : state.tryGetValue(OP_B(inst));
 
             if (OP_A(inst).kind == IrOpKind::VmReg)
             {
                 if (tag != 0xff)
                     state.saveTag(OP_A(inst), tag);
 
-                if (value.kind != IrOpKind::None)
+                if (value.kind == IrOpKind::Constant)
                     state.saveValue(OP_A(inst), value);
             }
 
-            IrCmd activeLoadCmd = IrCmd::NOP;
-            uint32_t activeLoadValue = kInvalidInstIdx;
+            IrCmd activeLoadCmd = explicitLoadCmd;
+            uint32_t activeLoadValue = explicitLoadValue;
 
             // If we know the tag, we can try extracting the value from a register used by LOAD_TVALUE
             // To do that, we have to ensure that the register link of the source value is still valid
@@ -2176,6 +2244,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
 
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH) || defined(LUAU_T24_EXPLICIT_HEAP_FACTS_RESEARCH)
+            if (explicitScalarFacts)
+                canSplitTvalueStore &= state.payloadMatchesScalarTag(value, tag);
+#endif
+
             if (canSplitTvalueStore)
             {
                 // A VM-register STORE_TVALUE may carry an explicit zero offset
@@ -2195,16 +2268,18 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 if (IrInst* target = function.asInstOp(OP_A(inst)))
                     state.forwardTableStoreToLoad(*target, OPT_OP_D(inst), index);
             }
-            else if (OP_A(inst).kind == IrOpKind::VmReg)
+            else if (OP_A(inst).kind == IrOpKind::VmReg && (!HAS_OP_D(inst) || explicitSameTvalue))
             {
                 state.forwardVmRegStoreToLoad(inst, IrCmd::LOAD_TVALUE);
             }
-            else if (IrInst* target = function.asInstOp(OP_A(inst)))
+            else if (IrInst* target = function.asInstOp(OP_A(inst)); target &&
+                     (!HAS_OP_D(inst) || explicitSameTvalue))
             {
                 state.forwardTableStoreToLoad(*target, OPT_OP_C(inst), index);
             }
         }
         break;
+    }
     case IrCmd::STORE_SPLIT_TVALUE:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -2376,7 +2451,19 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
-        if (sizeof(TValue) == 16 || state.valueHasSameTag(OP_B(inst), OPT_OP_C(inst)))
+    {
+#if defined(LUAU_T24_EXPLICIT_VM_FACTS_RESEARCH)
+        if constexpr (sizeof(TValue) > 16)
+        {
+            // Refine the actual tag operand, never the payload's inferred
+            // tag: in T24 the two may intentionally disagree. A CHECK_TAG
+            // can establish this fact after the tag SSA was first loaded.
+            if (uint8_t tag = state.tryGetTag(OP_C(inst)); tag != kUnknownTag)
+                replace(function, OP_C(inst), build.constTag(tag));
+        }
+#endif
+        bool sameTvalue = sizeof(TValue) == 16 || state.valueHasSameTag(OP_B(inst), OPT_OP_C(inst));
+        if (sameTvalue)
             state.forwardVmUpvalueStoreToLoad(inst);
         else
             state.upvalueMap.erase(vmUpvalueOp(OP_A(inst)));
@@ -2393,6 +2480,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         // Only the GC barrier needs the source value to remain in its VM register.
         if (HAS_OP_D(inst) && OP_C(inst).kind == IrOpKind::Constant && !isGCO(function.tagOp(OP_C(inst))))
             replace(function, OP_D(inst), IrOp{});
+        break;
+    }
+    case IrCmd::CLOSE_UPVALS:
         break;
     case IrCmd::CHECK_TAG:
     {
@@ -3429,7 +3519,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::RETURN:
     case IrCmd::COVERAGE:
     case IrCmd::SET_SAVEDPC:  // TODO: we may be able to remove some updates to PC
-    case IrCmd::CLOSE_UPVALS: // Doesn't change memory that we track
     case IrCmd::CAPTURE:
     case IrCmd::SUBSTITUTE:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
