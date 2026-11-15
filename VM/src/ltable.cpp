@@ -44,6 +44,10 @@ LUAU_DYNAMIC_FASTFLAG(LuauTableFindImprovement)
 #define MAXBITS 26
 #define MAXSIZE (1 << MAXBITS)
 
+#if defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH) && !LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#error "Scalar plane-write elision requires the compact vector cache"
+#endif
+
 #if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
 static_assert((kCompactNodePlaneOwnedMask & (WHITEBITS | bitmask(BLACKBIT) | bitmask(FIXEDBIT))) == 0,
     "compact plane ownership overlaps collector metadata");
@@ -1233,6 +1237,7 @@ static LUAU_NOINLINE int newcollidingvectorindexed(lua_State* L, LuaTable* t, in
     LuaNode* n = gnode(t, freeIndex);
     LUAU_ASSERT(n != dummynode && freeIndex == t->lastfree);
     uint32_t* cache = luauCompactNodeCache(t->node, sizenode(t));
+    LUAU_ASSERT(cache);
     int otherIndex;
     if (ttisvector(gkey(mp)))
     {
@@ -1271,8 +1276,15 @@ static LUAU_NOINLINE int newcollidingvectorindexed(lua_State* L, LuaTable* t, in
         }
         gnext(othern) = freeIndex - otherIndex;
         *n = *mp;
+#if defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH)
+        // Only a vector key can interpret the sidecar as a hash. The incoming
+        // vector overwrites its word below; scalar words need no maintenance.
+        if (ttisvector(gkey(mp)))
+            cache[freeIndex] = cache[mainIndex];
+#else
         cache[freeIndex] = cache[mainIndex];
         cache[mainIndex] = 0;
+#endif
         if (gnext(mp) != 0)
         {
             gnext(n) += mainIndex - freeIndex;
@@ -1301,7 +1313,7 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
     LuaNode* othern;
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     if (UseVectorHash && ttisvector(gkey(mp)))
-        othern = hashpow2(t, compactVectorBucketHash(t, mp));
+        othern = hashpow2(t, compactVectorBucketHash(t, mp, false));
     else
 #endif
 #if LUAU_T24_NUMERIC_KEY_HASH
@@ -1337,8 +1349,13 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
         if (luauHasCompactNodeCache(t))
         {
             uint32_t* cache = luauCompactNodeCache(t->node, sizenode(t));
+#if defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH)
+            if (ttisvector(gkey(mp)))
+                cache[n - t->node] = cache[mp - t->node];
+#else
             cache[n - t->node] = cache[mp - t->node];
             cache[mp - t->node] = 0;
+#endif
         }
 #endif
 
@@ -1468,6 +1485,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     }
 
     setnodekey(L, mp, key);
+#if !defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH)
 #if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
     uint32_t* compactCacheSlot = nullptr;
     if (luauHasCompactNodeCache(t))
@@ -1483,6 +1501,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     if (luauHasCompactNodeCache(t))
         luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
 #endif
+#endif
 #if LUAU_T24_NUMERIC_KEY_HASH
     if constexpr (Tag == LUA_TNUMBER)
         setNumericKeyHash(gkey(mp), h);
@@ -1491,11 +1510,23 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     if constexpr (Tag == LUA_TVECTOR)
     {
+#if defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH)
+        // Scalar tags never consume hash words. A new vector publishes the
+        // complete word, including when its slot previously held a scalar.
+        uint32_t* cache = luauHasCompactNodeCache(t) ? luauCompactNodeCache(t->node, sizenode(t)) : nullptr;
+        if (cache)
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+            cache[compactSlot] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#else
+            cache[mp - t->node] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#endif
+#else
         if (luauHasCompactNodeCache(t))
 #if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
             *compactCacheSlot = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
 #else
             luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#endif
 #endif
     }
 #endif
@@ -1575,8 +1606,7 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
     }
 
     setnodekey(L, mp, key);
-#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-    // Generic scalar writes cannot touch this key-owned sidecar.
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && !defined(LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH)
     if (luauHasCompactNodeCache(t))
         luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
 #endif
