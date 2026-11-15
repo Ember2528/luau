@@ -1041,6 +1041,80 @@ static LuaNode* getfreepos(LuaTable* t)
     return NULL; // could not find a free place
 }
 
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+#if !LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#error "Compact slot retention requires the compact cache plane"
+#endif
+// Ordinary vector insertion knows both positions before forming node pointers.
+// Keep them through relocation instead of dividing pointer differences by40 to
+// address the cache plane and encode relative chain links. No allocation or
+// callback occurs here; all positions belong to this unchanged node array.
+static LUAU_NOINLINE int newcollidingvectorindexed(lua_State* L, LuaTable* t, int mainIndex, int freeIndex)
+{
+    LuaNode* mp = gnode(t, mainIndex);
+    LuaNode* n = gnode(t, freeIndex);
+    LUAU_ASSERT(n != dummynode && freeIndex == t->lastfree);
+    uint32_t* cache = luauCompactNodeCache(t->node, sizenode(t));
+    int otherIndex;
+    if (ttisvector(gkey(mp)))
+    {
+        uint32_t hash;
+        uint32_t cached = cache[mainIndex];
+        if (cached & kCompactVectorHashMarker)
+        {
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+            ++compactVectorCacheReuse;
+#endif
+            hash = cached & kCompactVectorHashMask;
+        }
+        else
+        {
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+            ++compactVectorCacheMiss;
+#endif
+            hash = vectorHash(vvalue(gkey(mp)));
+        }
+        otherIndex = int(hash & unsigned(sizenode(t) - 1));
+    }
+    else
+    {
+        TValue mk;
+        getnodekey(L, &mk, mp);
+        otherIndex = cast_int(mainposition(t, &mk) - t->node);
+    }
+
+    if (otherIndex != mainIndex)
+    {
+        LuaNode* othern = gnode(t, otherIndex);
+        while (otherIndex + gnext(othern) != mainIndex)
+        {
+            otherIndex += gnext(othern);
+            othern = gnode(t, otherIndex);
+        }
+        gnext(othern) = freeIndex - otherIndex;
+        *n = *mp;
+        cache[freeIndex] = cache[mainIndex];
+        cache[mainIndex] = 0;
+        if (gnext(mp) != 0)
+        {
+            gnext(n) += mainIndex - freeIndex;
+            gnext(mp) = 0;
+        }
+        setnilvalue(gval(mp));
+        return mainIndex;
+    }
+    else
+    {
+        if (gnext(mp) != 0)
+            gnext(n) = mainIndex + gnext(mp) - freeIndex;
+        else
+            LUAU_ASSERT(gnext(n) == 0);
+        gnext(mp) = freeIndex - mainIndex;
+        return freeIndex;
+    }
+}
+#endif
+
 template<bool UseNumericHash, bool UseVectorHash = false>
 static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode* n)
 {
@@ -1136,6 +1210,9 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
         return newkeytagged<Tag, IsIntKey>(L, t, key, hashkey, newintkey);
     }
 
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+    int compactSlot = 0;
+#endif
 #if LUAU_T24_NUMERIC_KEY_HASH
     uint32_t h = 0;
     LuaNode* mp;
@@ -1148,7 +1225,12 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     {
 #if LUAU_T24_BALANCED_VECTOR_CACHE_ACTIVE || LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
         h = hasQueryHash ? queryHash : vectorHash(hashkey);
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+        compactSlot = int(h & unsigned(sizenode(t) - 1));
+        mp = gnode(t, compactSlot);
+#else
         mp = hashpow2(t, h);
+#endif
 #else
         mp = hasQueryHash ? hashpow2(t, queryHash) : mainpositiontagged<Tag>(t, hashkey);
 #endif
@@ -1178,6 +1260,14 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
         // Numeric and vector insertions select their respective cache checks.
         // Other insertions use the generic path, recomputing a displaced key's
         // hash to keep cache checks out of string/scalar insertion.
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+        if constexpr (Tag == LUA_TVECTOR)
+        {
+            compactSlot = newcollidingvectorindexed(L, t, compactSlot, t->lastfree);
+            mp = gnode(t, compactSlot);
+        }
+        else
+#endif
 #if LUAU_T24_BALANCED_VECTOR_CACHE_ACTIVE || LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
         // Keep the extra vector-cache tag check out of string/scalar insertion.
         mp = newcollidingkey<Tag == LUA_TNUMBER, Tag == LUA_TVECTOR>(L, t, mp, n);
@@ -1187,7 +1277,14 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     }
 
     setnodekey(L, mp, key);
-#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+    uint32_t* compactCacheSlot;
+    if constexpr (Tag == LUA_TVECTOR)
+        compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + compactSlot;
+    else
+        compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + (mp - t->node);
+    *compactCacheSlot = 0;
+#elif LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     // Generic scalar writes cannot touch this key-owned sidecar.
     luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
 #endif
@@ -1198,7 +1295,11 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     if constexpr (Tag == LUA_TVECTOR)
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+        *compactCacheSlot = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#else
         luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#endif
 #endif
 
     if (Tag >= LUA_TSTRING || Tag == LUA_TGCO)
