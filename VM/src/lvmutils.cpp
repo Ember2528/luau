@@ -178,7 +178,13 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
         { // `t' is a table?
             LuaTable* h = hvalue(t);
 
+#if defined(LUAU_T24_STRING_GET_RESEARCH)
+            // String keys need neither generic-tag dispatch nor the numeric/
+            // vector search-policy selection. Other key kinds retain it.
+            const TValue* res = ttisstring(key) ? luaH_getstr(h, tsvalue(key)) : luaH_get(h, key);
+#else
             const TValue* res = luaH_get(h, key); // do a primitive get
+#endif
 
             // A numeric result can belong to the array part, not the node
             // array. Only string field instructions use this hash-slot hint.

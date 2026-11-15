@@ -1710,7 +1710,16 @@ const TValue* luaH_getstr(LuaTable* t, TString* key)
     LuaNode* n = hashstr(t, key);
     for (;;)
     { // check whether `key' is somewhere in the chain
+#if defined(LUAU_T24_STRING_LOOKUP_RESEARCH)
+        // Compare the interned pointer bits first; tag is still required for
+        // scalar bit-pattern matches and collected string tombstones. memcpy
+        // avoids interpreting arbitrary scalar payloads as C++ pointer values.
+        uintptr_t keyBits;
+        memcpy(&keyBits, &n->key.value, sizeof(keyBits));
+        if (keyBits == uintptr_t(key) && ttisstring(gkey(n)))
+#else
         if (ttisstring(gkey(n)) && tsvalue(gkey(n)) == key)
+#endif
             return gval(n); // that's it
         if (gnext(n) == 0)
             break;
