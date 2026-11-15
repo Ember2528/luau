@@ -4,6 +4,8 @@
 #include "Luau/IrDump.h"
 #include "Luau/IrUtils.h"
 
+#include "lobject.h"
+
 LUAU_FASTFLAGVARIABLE(LuauCodegenImprovedExitSync)
 
 namespace Luau
@@ -257,6 +259,10 @@ void IrValueLocationTracking::afterInstLowering(IrInst& inst, uint32_t instIdx)
     case IrCmd::STORE_INT:
     case IrCmd::STORE_TVALUE:
     case IrCmd::STORE_VEC:
+        // A T16 explicit tag overwrites the last lane of the raw source.
+        if (inst.cmd == IrCmd::STORE_TVALUE && sizeof(TValue) == 16 && HAS_OP_D(inst))
+            break;
+
         // If this is not the last use of the stored value, we can restore it from this new location
         // Additionally, even if it's a last use, it might allow its argument to be restored
         if (OP_B(inst).kind == IrOpKind::Inst)

@@ -77,6 +77,10 @@ using HostUserdataNamecallHandler = bool (*)(
 using RuntimeBuildResultCallback = void (*)(void* context, const struct CompilationResult& result, const struct CompilationStats& stats);
 using RuntimeBuildLogCallback = void (*)(void* context, const std::string& message);
 
+// With a wide TValue, host IR must supply the separate tag to STORE_TVALUE
+// and SET_UPVALUE. A dynamic SET_UPVALUE tag also requires its source VM
+// register for the GC barrier. SELECT_IF_TRUTHY cannot represent the separate
+// tag; use control flow instead. Unsupported forms fail native compilation.
 struct HostIrHooks
 {
     // Suggest result type of a vector field access

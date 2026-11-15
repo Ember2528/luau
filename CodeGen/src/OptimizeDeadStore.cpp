@@ -130,6 +130,10 @@ struct RemoveDeadStoreState
             kind = IrValueKind::Pointer;
             break;
         case IrCmd::STORE_TVALUE:
+            // A raw T16 payload need not carry the explicit destination tag.
+            // Do not use the deleted store as a lazy packed-TValue location.
+            if (sizeof(TValue) == 16 && HAS_OP_D(storeInst))
+                return;
             value = OP_B(storeInst);
             kind = IrValueKind::Tvalue;
             break;
@@ -969,7 +973,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.tvalueInstIdx = index;
 
-            regInfo.knownTag = inst.cmd == IrCmd::STORE_VEC ? LUA_TVECTOR : tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
+            regInfo.knownTag = inst.cmd == IrCmd::STORE_VEC ? LUA_TVECTOR
+                : HAS_OP_D(inst) ? function.asTagOp(OP_D(inst)).value_or(kUnknownTag)
+                                 : tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
             regInfo.tagSourceInstIdx = ~0u;
             regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag);
 

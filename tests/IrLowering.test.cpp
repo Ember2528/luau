@@ -10,6 +10,9 @@
 #include "Luau/IrBuilder.h"
 #include "Luau/IrAnalysis.h"
 #include "Luau/IrDump.h"
+#include "Luau/IrUtils.h"
+#include "Luau/OptimizeConstProp.h"
+#include "Luau/OptimizeDeadStore.h"
 
 #include "doctest.h"
 #include "ScopedFlags.h"
@@ -8752,4 +8755,126 @@ bb_fallback_5:
 )"
     );
 }
+TEST_SUITE_END();
+
+TEST_SUITE_BEGIN("WideTValueIrGuards");
+
+TEST_CASE("ExplicitStoreTagOverridesPayloadTag")
+{
+    HostIrHooks hooks;
+    IrBuilder build(hooks, {});
+    int tnumber = parseTagName("tnumber");
+    int tvector = parseTagName("tvector");
+
+    IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp fallback = build.block(IrBlockKind::Internal);
+    build.beginBlock(entry);
+    IrOp vector = build.inst(IrCmd::LOAD_VEC, build.vmReg(1));
+    IrOp packed = build.inst(IrCmd::TAG_VECTOR, vector);
+    IrOp store = build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), packed, build.constInt(0), build.constTag(tnumber));
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(0));
+    IrOp check = build.inst(IrCmd::CHECK_TAG, tag, build.constTag(tvector), fallback);
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+    build.beginBlock(fallback);
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+
+    CHECK(build.function.instOp(store).cmd == IrCmd::STORE_TVALUE);
+    CHECK(OP_D(build.function.instOp(store)) == build.constTag(tnumber));
+    // The explicit number tag makes this vector check fail.
+    CHECK(build.function.instOp(check).cmd == IrCmd::JUMP);
+    CHECK(OP_A(build.function.instOp(check)) == fallback);
+}
+
+TEST_CASE("ExplicitStoreTagIsNotRemovedWhenPayloadIsUnchanged")
+{
+    HostIrHooks hooks;
+    IrBuilder build(hooks, {});
+    int tnumber = parseTagName("tnumber");
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    IrOp payload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
+    IrOp store = build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), payload, build.constInt(0), build.constTag(tnumber));
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+    markDeadStoresInBlockChains(build);
+    CHECK(build.function.instOp(store).cmd == IrCmd::STORE_TVALUE);
+    CHECK(OP_D(build.function.instOp(store)) == build.constTag(tnumber));
+}
+
+TEST_CASE("WideHostIrRejectsMissingTagsBeforeLowering")
+{
+#if LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    enum class Shape
+    {
+        MissingStoreTag,
+        MissingUpvalueTag,
+        MissingBarrierSource,
+        ValidExplicitTag,
+        ValidDynamicUpvalue,
+        RawBufferCopy,
+    };
+
+    auto checkLowering = [](Shape shape, AssemblyOptions::Target target, bool expectFailure)
+    {
+        INFO("IR shape " << int(shape) << ", target " << int(target));
+        HostIrHooks hooks;
+        IrBuilder build(hooks, {});
+        int tnumber = parseTagName("tnumber");
+        int tbuffer = parseTagName("tbuffer");
+        build.beginBlock(build.block(IrBlockKind::Internal));
+        IrOp payload;
+        if (shape != Shape::RawBufferCopy)
+            payload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
+
+        if (shape == Shape::MissingStoreTag)
+            build.inst(IrCmd::STORE_TVALUE, build.vmReg(1), payload);
+        else if (shape == Shape::MissingUpvalueTag)
+            build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), payload, build.undef(), build.vmReg(0));
+        else if (shape == Shape::MissingBarrierSource || shape == Shape::ValidDynamicUpvalue)
+        {
+            IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(0));
+            if (shape == Shape::MissingBarrierSource)
+                build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), payload, tag);
+            else
+                build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), payload, tag, build.vmReg(0));
+        }
+        else if (shape == Shape::RawBufferCopy)
+        {
+            IrOp buffer = build.inst(IrCmd::LOAD_POINTER, build.vmReg(2));
+            IrOp raw = build.inst(IrCmd::BUFFER_READF32X4, buffer, build.constInt(0), build.constTag(tbuffer));
+            build.inst(IrCmd::BUFFER_WRITEF32X4, buffer, build.constInt(16), raw, build.constTag(tbuffer));
+        }
+        else
+            build.inst(IrCmd::STORE_TVALUE, build.vmReg(1), payload, build.constInt(0), build.constTag(tnumber));
+
+        build.inst(IrCmd::RETURN, build.vmReg(1), build.constInt(1));
+        updateUseCounts(build.function);
+        AssemblyOptions options;
+        options.target = target;
+        options.includeAssembly = true;
+        options.includeIr = false;
+        options.outputBinary = false;
+        std::string assembly = getAssemblyFromIr(build, options);
+        INFO(assembly);
+        CHECK((assembly.find("; skipping (can't lower)") != std::string::npos) == expectFailure);
+    };
+
+    for (AssemblyOptions::Target target : {AssemblyOptions::X64_SystemV, AssemblyOptions::A64})
+    {
+        checkLowering(Shape::MissingStoreTag, target, true);
+        checkLowering(Shape::MissingUpvalueTag, target, true);
+        checkLowering(Shape::MissingBarrierSource, target, true);
+        checkLowering(Shape::ValidExplicitTag, target, false);
+        checkLowering(Shape::ValidDynamicUpvalue, target, false);
+        checkLowering(Shape::RawBufferCopy, target, false);
+    }
+#endif
+}
+
 TEST_SUITE_END();

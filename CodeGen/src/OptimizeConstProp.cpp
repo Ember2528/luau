@@ -413,6 +413,35 @@ struct ConstPropState
         return nullptr;
     }
 
+    // A wide TValue payload and its tag can be forwarded together only if
+    // they were loaded from the same register version or have the same
+    // independently established constant tag.
+    bool valueHasSameTag(IrOp valueOp, IrOp tagOp)
+    {
+        IrInst* value = function.asInstOp(valueOp);
+        if (!value || getCmdValueKind(value->cmd) != IrValueKind::Tvalue)
+            return false;
+
+        if (std::optional<uint8_t> tag = function.asTagOp(tagOp))
+        {
+            uint8_t valueTag = tryGetTag(valueOp);
+            if (valueTag == kUnknownTag)
+                valueTag = tryGetOperandTag(function, valueOp).value_or(kUnknownTag);
+            return valueTag == *tag;
+        }
+
+        IrInst* tagLoad = function.asInstOp(tagOp);
+        if (!tagLoad || value->cmd != IrCmd::LOAD_TVALUE || tagLoad->cmd != IrCmd::LOAD_TAG ||
+            OP_A(value).kind != IrOpKind::VmReg || OP_A(value) != OP_A(tagLoad) ||
+            (HAS_OP_B(*value) && function.asIntOp(OP_B(value)) != 0) ||
+            (HAS_OP_B(*tagLoad) && function.asIntOp(OP_B(tagLoad)) != 0))
+            return false;
+
+        RegisterLink* valueLink = tryGetRegLink(valueOp);
+        RegisterLink* tagLink = tryGetRegLink(tagOp);
+        return valueLink && tagLink && valueLink->reg == tagLink->reg && valueLink->version == tagLink->version;
+    }
+
     // Attach register version number to the register operand in a load instruction
     // This is used to allow instructions with register references to be compared for equality
     IrInst versionedVmRegLoad(IrCmd loadCmd, IrOp op)
@@ -1747,7 +1776,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             else if (uint32_t* packed = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, reg))
             {
                 IrInst& source = function.instructions[*packed];
-                if (source.cmd == IrCmd::TAG_VECTOR)
+                if (source.cmd == IrCmd::TAG_VECTOR &&
+                    getCmdValueKind(function.instOp(OP_A(source)).cmd) == IrValueKind::Vector)
                 {
                     IrOp payload = OP_A(source);
                     substitute(function, inst, payload);
@@ -2027,13 +2057,53 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             // A copied vector result still has semantic components. Generic
             // copies loaded from memory retain the packed LOAD/STORE_TVALUE path.
-            if (IrInst* value = function.asInstOp(OP_B(inst)); value && value->cmd == IrCmd::TAG_VECTOR)
+            if (IrInst* value = function.asInstOp(OP_B(inst)); value && value->cmd == IrCmd::TAG_VECTOR &&
+                (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0) &&
+                (!HAS_OP_D(inst) || function.asTagOp(OP_D(inst)) == LUA_TVECTOR) &&
+                getCmdValueKind(function.instOp(OP_A(value)).cmd) == IrValueKind::Vector)
             {
                 replace(function, block, index, {IrCmd::STORE_VEC, {OP_A(inst), OP_A(value)}});
                 state.trackVectorStore(inst);
                 break;
             }
         }
+        // D normally overrides the stored tag independently of payload B.
+        // Only forward a complete TValue when we can prove they agree.
+        if (HAS_OP_D(inst))
+        {
+            if (OP_A(inst).kind == IrOpKind::VmReg)
+            {
+                std::optional<uint8_t> tag = function.asTagOp(OP_D(inst));
+                bool sameTvalue = (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0) &&
+                                  state.valueHasSameTag(OP_B(inst), OP_D(inst));
+
+                // Avoid invalidating a version before checking whether this is
+                // a write-back of the very same value and tag.
+                if (sameTvalue)
+                {
+                    if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(inst));
+                        prevIdx && *prevIdx == OP_B(inst).index)
+                    {
+                        if (FFlag::LuauCodegenMarkUsed)
+                            state.killStore(block, inst);
+                        else
+                            kill(function, inst);
+                        break;
+                    }
+                }
+
+                state.invalidate(OP_A(inst));
+                if (tag)
+                    state.saveTag(OP_A(inst), *tag);
+
+                if (sameTvalue)
+                    state.forwardVmRegStoreToLoad(inst, IrCmd::LOAD_TVALUE);
+            }
+            else if (IrInst* target = function.asInstOp(OP_A(inst)))
+                state.invalidateTableStoreLocation(*target, OPT_OP_C(inst), function.asTagOp(OP_D(inst)).value_or(kUnknownTag));
+            break;
+        }
+
         if (OP_A(inst).kind == IrOpKind::VmReg || OP_A(inst).kind == IrOpKind::Inst)
         {
             if (OP_A(inst).kind == IrOpKind::VmReg)
@@ -2306,11 +2376,18 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
-        state.forwardVmUpvalueStoreToLoad(inst);
+        if (sizeof(TValue) == 16 || state.valueHasSameTag(OP_B(inst), OPT_OP_C(inst)))
+            state.forwardVmUpvalueStoreToLoad(inst);
+        else
+            state.upvalueMap.erase(vmUpvalueOp(OP_A(inst)));
 
-        if (uint8_t tag = state.tryGetTag(OP_B(inst)); tag != 0xff)
+        // In T24, C is the actual separate tag being written and may differ
+        // from B's inferred tag. The packed T16 representation carries the tag
+        // in B, so only that layout can infer it here.
+        if constexpr (sizeof(TValue) == 16)
         {
-            replace(function, OP_C(inst), build.constTag(tag));
+            if (uint8_t tag = state.tryGetTag(OP_B(inst)); tag != 0xff)
+                replace(function, OP_C(inst), build.constTag(tag));
         }
 
         // Only the GC barrier needs the source value to remain in its VM register.
@@ -3277,7 +3354,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
 
     case IrCmd::TVALUE_TO_VEC:
-        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::TAG_VECTOR)
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::TAG_VECTOR &&
+            getCmdValueKind(function.instOp(OP_A(source)).cmd) == IrValueKind::Vector)
             substitute(function, inst, OP_A(source));
         else
             state.substituteOrRecord(inst, index);

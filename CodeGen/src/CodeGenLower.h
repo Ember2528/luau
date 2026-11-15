@@ -451,6 +451,45 @@ inline void finalizeFunctionForLowering(IrFunction& function, const std::vector<
 }
 
 
+// Wide TValue payloads do not carry their tags. Reject host IR forms whose
+// existing operands cannot supply enough information to lower them safely.
+inline bool hasUnsupportedWideTvalueInsts(IrFunction& function)
+{
+    if constexpr (sizeof(TValue) == 16)
+        return false;
+
+    for (const IrBlock& block : function.blocks)
+    {
+        if (block.kind == IrBlockKind::Dead)
+            continue;
+
+        for (uint32_t index = block.start; index <= block.finish; ++index)
+        {
+            IrInst& inst = function.instructions[index];
+            if (inst.cmd == IrCmd::SELECT_IF_TRUTHY)
+                return true;
+
+            if (inst.cmd == IrCmd::STORE_TVALUE)
+            {
+                IrOp tag = OPT_OP_D(inst);
+                if (tag.kind != IrOpKind::Constant && tag.kind != IrOpKind::Inst)
+                    return true;
+            }
+
+            if (inst.cmd == IrCmd::SET_UPVALUE)
+            {
+                IrOp tag = OPT_OP_C(inst);
+                IrOp source = OPT_OP_D(inst);
+                if ((tag.kind != IrOpKind::Constant && tag.kind != IrOpKind::Inst) ||
+                    (HAS_OP_D(inst) && source.kind != IrOpKind::VmReg) ||
+                    (tag.kind == IrOpKind::Inst && source.kind != IrOpKind::VmReg))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
 template<typename AssemblyBuilder>
 inline bool lowerFunction(
     IrBuilder& ir,
@@ -470,6 +509,12 @@ inline bool lowerFunction(
         ir.function.jitRngState = jitRngSeed(uintptr_t(proto));
 
     killUnusedBlocks(ir.function);
+
+    if (hasUnsupportedWideTvalueInsts(ir.function))
+    {
+        codeGenCompilationResult = CodeGenCompilationResult::CodeGenLoweringFailure;
+        return false;
+    }
 
     unsigned preOptBlockCount = 0;
     unsigned maxBlockInstructions = 0;
@@ -535,6 +580,12 @@ inline bool lowerFunction(
 
     // Final instruction selection must precede lifetime assignment for register allocation.
     finalizeFunctionForLowering(ir.function, sortedBlocks);
+
+    if (hasUnsupportedWideTvalueInsts(ir.function))
+    {
+        codeGenCompilationResult = CodeGenCompilationResult::CodeGenLoweringFailure;
+        return false;
+    }
 
     if (stats)
     {
