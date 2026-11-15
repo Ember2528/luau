@@ -51,6 +51,7 @@
 ** bit 1 - object is white (type 1)
 ** bit 2 - object is black
 ** bit 3 - object is fixed (should not be collected)
+** bit 4 - table-only compact node-plane ownership in the lazy-plane experiment
 */
 
 #define WHITE0BIT 0

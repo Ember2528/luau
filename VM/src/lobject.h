@@ -725,7 +725,7 @@ using TKeyRef = const TKey*;
 
 // The compact-cache trial appends a uint32_t per hash slot to the SAME node
 // allocation. Nodes remain40 bytes and table headers remain48 bytes; backing
-// is44 bytes/slot when enabled. This plane is key-owned and never overlaps
+// is44 bytes/slot when owned (40 without the lazy plane). It never overlaps
 // any semantic value, key payload, or packed key tag/chain bits.
 #if defined(LUAU_T24_COMPACT_VECTOR_CACHE_RESEARCH)
 #if !defined(LUAU_T24_PACKED_NODE) || !LUAU_T24_NUMERIC_KEY_HASH
@@ -735,9 +735,20 @@ using TKeyRef = const TKey*;
 #else
 #define LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE 0
 #endif
-inline constexpr size_t luauNodeStorageBytes(size_t count)
+#if defined(LUAU_T24_LAZY_COMPACT_PLANE_RESEARCH)
+#if !LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#error "Lazy compact planes require the compact vector-cache profile"
+#endif
+#define LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE 1
+// Table-only allocation ownership. GC color operations preserve bits above
+// FIXEDBIT; keeping this out of readonly/safeenv retains their boolean ABI.
+constexpr uint8_t kCompactNodePlaneOwnedMask = 1u << 4;
+#else
+#define LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE 0
+#endif
+inline constexpr size_t luauNodeStorageBytes(size_t count, bool cache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE)
 {
-    return count * (sizeof(LuaNode) + (LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE ? sizeof(uint32_t) : 0));
+    return count * (sizeof(LuaNode) + (cache ? sizeof(uint32_t) : 0));
 }
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
 constexpr uint32_t kCompactVectorHashMarker = 0x80000000u;
@@ -816,6 +827,34 @@ typedef struct LuaTable
     LuaNode* node;
     GCObject* gclist;
 } LuaTable;
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+static_assert(sizeof(LuaTable) == 48, "lazy plane ownership changed table layout");
+#endif
+
+inline bool luauHasCompactNodeCache(const LuaTable* t)
+{
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    return (t->marked & kCompactNodePlaneOwnedMask) != 0;
+#else
+    (void)t;
+    return LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE;
+#endif
+}
+
+inline void luauSetCompactNodeCacheOwned(LuaTable* t, bool owned)
+{
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    t->marked = uint8_t((t->marked & ~kCompactNodePlaneOwnedMask) | (owned ? kCompactNodePlaneOwnedMask : 0));
+#else
+    (void)t;
+    (void)owned;
+#endif
+}
+
+inline size_t luauTableNodeStorageBytes(const LuaTable* t, size_t count)
+{
+    return luauNodeStorageBytes(count, luauHasCompactNodeCache(t));
+}
 // clang-format on
 
 typedef struct LuauClass

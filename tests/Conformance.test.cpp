@@ -23,6 +23,7 @@
 
 #include "doctest.h"
 #include "ScopedFlags.h"
+#include "ltable.h"
 #include "BufferCage.h"
 #include "ConformanceIrHooks.h"
 
@@ -1439,6 +1440,41 @@ TEST_CASE("Tables")
         lua_newstate(limitedRealloc, nullptr)
     );
 }
+
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+TEST_CASE("CompactTableResizeRechecksAllocationObserver")
+{
+    StateRef state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    lua_createtable(L, 0, 32);
+    auto* table = const_cast<LuaTable*>(static_cast<const LuaTable*>(lua_topointer(L, 1)));
+    REQUIRE(!luauHasCompactNodeCache(table));
+
+    bool pending = true;
+    lua_callbacks(L)->userdata = &pending;
+    lua_callbacks(L)->onallocate = [](lua_State* L, void*, size_t, size_t newSize, uint8_t, int, int)
+    {
+        bool& pending = *static_cast<bool*>(lua_callbacks(L)->userdata);
+        if (pending && newSize == 32 * sizeof(LuaNode))
+        {
+            pending = false;
+            // Inserting the first vector changes the contents without changing the storage descriptor.
+            lua_pushvector(L, 1, 2, 3, 7);
+            lua_pushinteger(L, 77);
+            lua_rawset(L, 1);
+        }
+    };
+    luaH_resizehash(L, table, 32);
+    lua_callbacks(L)->onallocate = nullptr;
+    lua_callbacks(L)->userdata = nullptr;
+
+    CHECK(!pending);
+    lua_pushvector(L, 1, 2, 3, 7);
+    lua_rawget(L, 1);
+    CHECK(lua_tointeger(L, -1) == 77);
+    luaC_validate(L);
+}
+#endif
 
 TEST_CASE("PatternMatch")
 {

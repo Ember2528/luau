@@ -44,6 +44,10 @@ LUAU_DYNAMIC_FASTFLAG(LuauTableFindImprovement)
 #define MAXBITS 26
 #define MAXSIZE (1 << MAXBITS)
 
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+static_assert((kCompactNodePlaneOwnedMask & (WHITEBITS | bitmask(BLACKBIT) | bitmask(FIXEDBIT))) == 0,
+    "compact plane ownership overlaps collector metadata");
+#endif
 #if defined(LUAU_T24_BALANCED_VECTOR_TEST_COUNTERS)
 extern "C" {
 uint64_t luau_balanced_vector_hash_calls = 0;
@@ -234,7 +238,7 @@ extern "C" { uint64_t compactVectorCacheReuse = 0, compactVectorCacheMiss = 0, c
 static uint32_t compactVectorBucketHash(const LuaTable* t, const LuaNode* node, bool rehash = false)
 {
     LUAU_ASSERT(ttisvector(gkey(node)) && t->node != dummynode);
-    uint32_t cached = luauCompactNodeCache(t->node, sizenode(t))[node - t->node];
+    uint32_t cached = luauHasCompactNodeCache(t) ? luauCompactNodeCache(t->node, sizenode(t))[node - t->node] : 0;
     if (cached & kCompactVectorHashMarker)
     {
 #if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
@@ -713,6 +717,47 @@ static LUAU_FORCEINLINE void initializeEmptyCompactNode(LuaNode* node)
 }
 #endif
 
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+static bool sameTableStorage(const LuaTable* t, const LuaNode* node, int nodeSize, const TValue* array, int arraySize, bool hasCache)
+{
+    return t->node == node && sizenode(t) == nodeSize && t->array == array && t->sizearray == arraySize &&
+           luauHasCompactNodeCache(t) == hasCache;
+}
+
+// Allocate/copy/publish, rather than reallocating the published node block:
+// allocation callbacks and failure paths continue to see the complete old
+// table. No interior slot pointer may survive a successful promotion.
+static bool tryEnsureCompactNodeCache(lua_State* L, LuaTable* t)
+{
+    while (!luauHasCompactNodeCache(t) && t->node != dummynode)
+    {
+        LuaNode* oldnode = t->node;
+        int size = sizenode(t);
+        size_t oldbytes = luauNodeStorageBytes(size, false);
+        size_t newbytes = luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1, true));
+        LuaNode* newnode = static_cast<LuaNode*>(luaM_trynew_(L, newbytes, t->memcat));
+        if (!newnode)
+            return false;
+
+        // Observers may run at allocation callbacks. Do not consume a stale
+        // snapshot if a callback has replaced/promoted this table's storage.
+        if (t->node != oldnode || sizenode(t) != size || luauHasCompactNodeCache(t))
+        {
+            luaM_free_(L, newnode, newbytes, t->memcat);
+            continue;
+        }
+
+        memcpy(newnode, oldnode, oldbytes);
+        memset(luauCompactNodeCache(newnode, size), 0, size_t(size) * sizeof(uint32_t));
+        t->node = newnode;
+        luauSetCompactNodeCacheOwned(t, true);
+        luaM_free_(L, oldnode, oldbytes, t->memcat);
+        // Recheck after a free observer as well; the normal case is one pass.
+    }
+    return true;
+}
+#endif
+
 static void setnodevector(lua_State* L, LuaTable* t, int size)
 {
     int lsize;
@@ -728,9 +773,12 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         if (lsize > MAXBITS)
             luaG_runerror(L, "table overflow");
         size = twoto(lsize);
-        t->node = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1)), t->memcat));
+        constexpr bool withCache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && !LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE;
+        t->node = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1, withCache)), t->memcat));
+        luauSetCompactNodeCacheOwned(t, withCache);
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-        memset(luauCompactNodeCache(t->node, size), 0, size_t(size) * sizeof(uint32_t));
+        if (withCache)
+            memset(luauCompactNodeCache(t->node, size), 0, size_t(size) * sizeof(uint32_t));
 #endif
         for (i = 0; i < size; i++)
         {
@@ -765,8 +813,11 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
 static TValue* reinsertvector(lua_State* L, LuaTable* t, const LuaNode* old, uint32_t oldVectorCache, uint32_t* destinationCache);
 #endif
 
-static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize, bool wantVectorCache = false)
 {
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+retry:
+#endif
     invalidateFrozenHashIndex(t);
     LUAU_ASSERT(!hasmetacache(t));
 
@@ -790,29 +841,49 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
     int oldsizenode = twoto(t->lsizenode);
     TValue* oldarray = t->array;
     LuaNode* oldnode = t->node;
+    bool oldHasCache = luauHasCompactNodeCache(t);
+    bool newHasCache = LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE;
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    newHasCache = wantVectorCache;
+    // A cleared/deleted vector population can return to node-only backing on
+    // its next resize. Stop at the first live vector in the common case.
+    if (!newHasCache)
+        for (int i = 0; i < oldsizenode; ++i)
+            if (!ttisnil(gval(oldnode + i)) && ttisvector(gkey(oldnode + i)))
+            {
+                newHasCache = true;
+                break;
+            }
+#else
+    (void)wantVectorCache;
+#endif
 
     TValue* newarray = t->array;
 
     if (nasize != oldsizearray)
     {
         newarray = luaM_newarray(L, nasize, TValue, t->memcat);
-
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+        if (!sameTableStorage(t, oldnode, oldsizenode, oldarray, oldsizearray, oldHasCache))
+        {
+            luaM_freearray(L, newarray, nasize, TValue, t->memcat);
+            goto retry;
+        }
+#endif
+#if !LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
         if (nasize < oldsizearray)
         {
-            // copy elements from remaining slice
             if (nasize != 0)
                 memcpy(newarray, oldarray, nasize * sizeof(TValue));
         }
         else
         {
-            // copy old elements
             if (oldsizearray != 0)
                 memcpy(newarray, oldarray, oldsizearray * sizeof(TValue));
-
-            // clear new elements
-            for (int i = oldsizearray; i < nasize; i++)
+            for (int i = oldsizearray; i < nasize; ++i)
                 setnilvalue(&newarray[i]);
         }
+#endif
     }
 
     LuaNode* newnode = cast_to(LuaNode*, dummynode);
@@ -822,7 +893,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         // if we allocated a new array part, we have to be careful to with hash part allocation failure
         if (oldarray != newarray)
         {
-            newnode = static_cast<LuaNode*>(luaM_trynew_(L, luaM_arraysize_(L, size_t(nhsize), luauNodeStorageBytes(1)), t->memcat));
+            newnode = static_cast<LuaNode*>(luaM_trynew_(L, luaM_arraysize_(L, size_t(nhsize), luauNodeStorageBytes(1, newHasCache)), t->memcat));
 
             if (newnode == nullptr)
             {
@@ -832,11 +903,25 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         }
         else
         {
-            newnode = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(nhsize), luauNodeStorageBytes(1)), t->memcat));
+            newnode = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(nhsize), luauNodeStorageBytes(1, newHasCache)), t->memcat));
         }
 
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+        // A callback can now promote the old node allocation without changing
+        // capacity. Revalidate ownership as well as both pointers before any
+        // old storage is read or released.
+        if (!sameTableStorage(t, oldnode, oldsizenode, oldarray, oldsizearray, oldHasCache))
+        {
+            luaM_free_(L, newnode, luauNodeStorageBytes(nhsize, newHasCache), t->memcat);
+            if (newarray != oldarray)
+                luaM_freearray(L, newarray, nasize, TValue, t->memcat);
+            goto retry;
+        }
+#endif
+
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-        memset(luauCompactNodeCache(newnode, nhsize), 0, size_t(nhsize) * sizeof(uint32_t));
+        if (newHasCache)
+            memset(luauCompactNodeCache(newnode, nhsize), 0, size_t(nhsize) * sizeof(uint32_t));
 #endif
         for (int i = 0; i < nhsize; i++)
         {
@@ -854,11 +939,73 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         }
     }
 
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    if (!newHasCache)
+    {
+        bool liveVector = false;
+        for (int i = 0; i < oldsizenode; ++i)
+            if (!ttisnil(gval(oldnode + i)) && ttisvector(gkey(oldnode + i)))
+            {
+                liveVector = true;
+                break;
+            }
+        if (liveVector)
+        {
+            // A first vector inserted by an allocation observer changes no
+            // descriptor in an unowned arena. Recheck after the final callback
+            // and retry with a plane before any migration can use its cache.
+            int requiredHash = 0;
+            for (int i = 0; i < oldsizenode; ++i)
+            {
+                LuaNode* n = oldnode + i;
+                if (ttisnil(gval(n)))
+                    continue;
+                if (ttisnumber(gkey(n)))
+                {
+                    double number = nvalue(gkey(n));
+                    int key;
+                    luai_num2int(key, number);
+                    if (luai_numeq(cast_num(key), number) && unsigned(key) - 1 < unsigned(nasize))
+                        continue;
+                }
+                ++requiredHash;
+            }
+            for (int i = nasize; i < oldsizearray; ++i)
+                requiredHash += !ttisnil(&oldarray[i]);
+            if (newnode != dummynode)
+                luaM_free_(L, newnode, luauNodeStorageBytes(nhsize, newHasCache), t->memcat);
+            if (newarray != oldarray)
+                luaM_freearray(L, newarray, nasize, TValue, t->memcat);
+            wantVectorCache = true;
+            if (requiredHash > nhsize)
+                nhsize = requiredHash;
+            goto retry;
+        }
+    }
+    // A callback may also publish an index on an existing owned source arena.
+    // It refers to old positions and must not survive descriptor publication.
+    invalidateFrozenHashIndex(t);
+#endif
+
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    if (nasize != oldsizearray)
+    {
+        // Copy only after both allocation callbacks have returned, so updates
+        // to existing array values are not overwritten by an earlier snapshot.
+        int copyCount = nasize < oldsizearray ? nasize : oldsizearray;
+        if (copyCount)
+            memcpy(newarray, oldarray, size_t(copyCount) * sizeof(TValue));
+        for (int i = oldsizearray; i < nasize; ++i)
+            setnilvalue(&newarray[i]);
+    }
+#endif
+
     // update table structure now that both allocations succeeded
     t->array = newarray;
     t->sizearray = nasize;
 
     t->node = newnode;
+    luauSetCompactNodeCacheOwned(t, nhsize != 0 && newHasCache);
     t->lsizenode = cast_byte(lsizenode);
     t->nodemask8 = cast_byte((1 << lsizenode) - 1);
     t->lastfree = nhsize; // all positions are free
@@ -878,8 +1025,8 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 #if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
     // No allocation or recursive resize occurs during migration. Keep both
     // planes rooted in their respective node arrays until the old array dies.
-    uint32_t* destinationCache = nhsize ? luauCompactNodeCache(newnode, nhsize) : nullptr;
-    const uint32_t* oldCache = oldnode != dummynode ? luauCompactNodeCache(oldnode, oldsizenode) : nullptr;
+    uint32_t* destinationCache = nhsize && newHasCache ? luauCompactNodeCache(newnode, nhsize) : nullptr;
+    const uint32_t* oldCache = oldnode != dummynode && oldHasCache ? luauCompactNodeCache(oldnode, oldsizenode) : nullptr;
 #endif
 
     // re-insert elements from hash part
@@ -891,7 +1038,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 #if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
             if (luauNodeKeyType(old) == LUA_TVECTOR)
             {
-                setobjt2t(L, reinsertvector(L, t, old, oldCache[i], destinationCache), gval(old));
+                setobjt2t(L, reinsertvector(L, t, old, oldCache ? oldCache[i] : 0, destinationCache), gval(old));
                 continue;
             }
 #endif
@@ -899,7 +1046,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
             getnodekey(L, &ok, old);
             setobjt2t(L, reinsertkey(L, t, &ok, true, &old->key
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-                , luauCompactNodeCache(oldnode, oldsizenode)[i]
+                , oldHasCache ? luauCompactNodeCache(oldnode, oldsizenode)[i] : 0
 #endif
             ), gval(old));
         }
@@ -915,7 +1062,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 
     // free old node
     if (oldnode != dummynode)
-        luaM_free_(L, oldnode, luauNodeStorageBytes(oldsizenode), t->memcat);
+        luaM_free_(L, oldnode, luauNodeStorageBytes(oldsizenode, oldHasCache), t->memcat);
 }
 
 // When we already know that new key is an integer number
@@ -944,14 +1091,14 @@ void luaH_resizehash(lua_State* L, LuaTable* t, int nhsize)
 }
 
 template<bool IsIntKey>
-static void rehash(lua_State* L, LuaTable* t, int newintkey)
+static void rehash(lua_State* L, LuaTable* t, int newintkey, bool wantVectorCache = false)
 {
     // insertions of keys that are not integer numbers do not have to rehash the array part
     // this can mean that such key insert will not cause the sparse array/node rebalance, but this is actually less surprising
     if (!IsIntKey)
     {
         int nh = hashslotsused(t) + 1;
-        resize(L, t, t->sizearray, nh);
+        resize(L, t, t->sizearray, nh, wantVectorCache);
         return;
     }
 
@@ -1005,7 +1152,7 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
     }
 
     // resize the table to new computed sizes
-    resize(L, t, nasize, nh);
+    resize(L, t, nasize, nh, wantVectorCache);
 }
 
 /*
@@ -1036,7 +1183,7 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
 void luaH_free(lua_State* L, LuaTable* t, lua_Page* page)
 {
     if (t->node != dummynode)
-        luaM_free_(L, t->node, luauNodeStorageBytes(sizenode(t)), t->memcat);
+        luaM_free_(L, t->node, luauTableNodeStorageBytes(t, sizenode(t)), t->memcat);
 
     if (t->array)
     {
@@ -1177,9 +1324,12 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
         gnext(othern) = cast_int(n - othern); // redo the chain with `n' in place of `mp'
         *n = *mp;                             // copy colliding node into free pos. (mp->next also goes)
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-        uint32_t* cache = luauCompactNodeCache(t->node, sizenode(t));
-        cache[n - t->node] = cache[mp - t->node];
-        cache[mp - t->node] = 0;
+        if (luauHasCompactNodeCache(t))
+        {
+            uint32_t* cache = luauCompactNodeCache(t->node, sizenode(t));
+            cache[n - t->node] = cache[mp - t->node];
+            cache[mp - t->node] = 0;
+        }
 #endif
 
         if (gnext(mp) != 0)
@@ -1222,7 +1372,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     // enforce boundary invariant
     if (IsIntKey && newintkey == t->sizearray + 1)
     {
-        rehash<IsIntKey>(L, t, newintkey); // grow table
+        rehash<IsIntKey>(L, t, newintkey, Tag == LUA_TVECTOR); // grow table
 
         if (unsigned(newintkey) - 1 < unsigned(t->sizearray))
             return &t->array[newintkey - 1];
@@ -1269,7 +1419,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
         // cannot find a free place?
         if (n == nullptr)
         {
-            rehash<IsIntKey>(L, t, newintkey); // grow table
+            rehash<IsIntKey>(L, t, newintkey, Tag == LUA_TVECTOR); // grow table
 
             if (IsIntKey && unsigned(newintkey) - 1 < unsigned(t->sizearray))
                 return &t->array[newintkey - 1];
@@ -1284,8 +1434,18 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 #if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
         if constexpr (Tag == LUA_TVECTOR)
         {
-            compactSlot = newcollidingvectorindexed(L, t, compactSlot, t->lastfree);
-            mp = gnode(t, compactSlot);
+            if (luauHasCompactNodeCache(t))
+            {
+                compactSlot = newcollidingvectorindexed(L, t, compactSlot, t->lastfree);
+                mp = gnode(t, compactSlot);
+            }
+            else
+            {
+                // Pre-reserved scalar arenas may acquire vectors without a
+                // plane. Keep that insertion allocation/callback-free; their
+                // next resize discovers live vectors and allocates the cache.
+                mp = newcollidingkey<false, false>(L, t, mp, n);
+            }
         }
         else
 #endif
@@ -1299,15 +1459,19 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 
     setnodekey(L, mp, key);
 #if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
-    uint32_t* compactCacheSlot;
-    if constexpr (Tag == LUA_TVECTOR)
-        compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + compactSlot;
-    else
-        compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + (mp - t->node);
-    *compactCacheSlot = 0;
+    uint32_t* compactCacheSlot = nullptr;
+    if (luauHasCompactNodeCache(t))
+    {
+        if constexpr (Tag == LUA_TVECTOR)
+            compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + compactSlot;
+        else
+            compactCacheSlot = luauCompactNodeCache(t->node, sizenode(t)) + (mp - t->node);
+        *compactCacheSlot = 0;
+    }
 #elif LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     // Generic scalar writes cannot touch this key-owned sidecar.
-    luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
+    if (luauHasCompactNodeCache(t))
+        luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
 #endif
 #if LUAU_T24_NUMERIC_KEY_HASH
     if constexpr (Tag == LUA_TNUMBER)
@@ -1316,11 +1480,14 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     if constexpr (Tag == LUA_TVECTOR)
+    {
+        if (luauHasCompactNodeCache(t))
 #if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
-        *compactCacheSlot = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+            *compactCacheSlot = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
 #else
-        luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
+            luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = (h & kCompactVectorHashMask) | kCompactVectorHashMarker;
 #endif
+    }
 #endif
 
     if (Tag >= LUA_TSTRING || Tag == LUA_TGCO)
@@ -1400,7 +1567,8 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
     setnodekey(L, mp, key);
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
     // Generic scalar writes cannot touch this key-owned sidecar.
-    luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
+    if (luauHasCompactNodeCache(t))
+        luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = 0;
 #endif
 #if LUAU_T24_NUMERIC_KEY_HASH
     if (numeric)
@@ -1849,6 +2017,62 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
     t->node = cast_to(LuaNode*, dummynode);
     t->lastfree = 0;
 
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    // Source promotion can occur inside either allocation callback, even at
+    // unchanged capacity. Keep both clone allocations private until their
+    // source descriptor and plane ownership have been revalidated.
+    for (;;)
+    {
+        LuaNode* sourceNode = tt->node;
+        int sourceNodeSize = sizenode(tt);
+        TValue* sourceArray = tt->array;
+        int sourceArraySize = tt->sizearray;
+        bool withCache = luauHasCompactNodeCache(tt);
+        int hashSize = sourceNode == dummynode ? 0 : sourceNodeSize;
+        TValue* newarray = sourceArraySize ? luaM_newarray(L, sourceArraySize, TValue, t->memcat) : nullptr;
+        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, withCache))
+        {
+            if (newarray)
+                luaM_freearray(L, newarray, sourceArraySize, TValue, t->memcat);
+            continue;
+        }
+
+        LuaNode* newnode = cast_to(LuaNode*, dummynode);
+        if (hashSize)
+        {
+            size_t nodeBytes = luaM_arraysize_(L, size_t(hashSize), luauNodeStorageBytes(1, withCache));
+            newnode = static_cast<LuaNode*>(newarray ? luaM_trynew_(L, nodeBytes, t->memcat) : luaM_new_(L, nodeBytes, t->memcat));
+            if (!newnode)
+            {
+                luaM_freearray(L, newarray, sourceArraySize, TValue, t->memcat);
+                luaD_throw(L, LUA_ERRMEM);
+            }
+        }
+        if (!sameTableStorage(tt, sourceNode, sourceNodeSize, sourceArray, sourceArraySize, withCache))
+        {
+            if (hashSize)
+                luaM_free_(L, newnode, luauNodeStorageBytes(hashSize, withCache), t->memcat);
+            if (newarray)
+                luaM_freearray(L, newarray, sourceArraySize, TValue, t->memcat);
+            continue;
+        }
+
+        if (newarray)
+            memcpy(newarray, sourceArray, size_t(sourceArraySize) * sizeof(TValue));
+        if (hashSize)
+            memcpy(newnode, sourceNode, luauNodeStorageBytes(hashSize, withCache));
+        t->metatable = tt->metatable;
+        t->tmcache = tt->tmcache;
+        t->array = newarray;
+        t->sizearray = sourceArraySize;
+        t->node = newnode;
+        t->lsizenode = tt->lsizenode;
+        t->nodemask8 = tt->nodemask8;
+        t->lastfree = tt->lastfree;
+        luauSetCompactNodeCacheOwned(t, hashSize != 0 && withCache);
+        return t;
+    }
+#else
     if (tt->sizearray)
     {
         t->array = luaM_newarray(L, tt->sizearray, TValue, t->memcat);
@@ -1861,14 +2085,17 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
     if (tt->node != dummynode)
     {
         int size = 1 << tt->lsizenode;
-        t->node = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1)), t->memcat));
+        bool withCache = luauHasCompactNodeCache(tt);
+        t->node = static_cast<LuaNode*>(luaM_new_(L, luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1, withCache)), t->memcat));
+        luauSetCompactNodeCacheOwned(t, withCache);
         t->lsizenode = tt->lsizenode;
         t->nodemask8 = tt->nodemask8;
-        memcpy(t->node, tt->node, luauNodeStorageBytes(size));
+        memcpy(t->node, tt->node, luauNodeStorageBytes(size, withCache));
         t->lastfree = tt->lastfree;
     }
 
     return t;
+#endif
 }
 
 void luaH_clear(LuaTable* tt)
@@ -1888,7 +2115,8 @@ void luaH_clear(LuaTable* tt)
         int size = sizenode(tt);
         tt->lastfree = size;
 #if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
-        memset(luauCompactNodeCache(tt->node, size), 0, size_t(size) * sizeof(uint32_t));
+        if (luauHasCompactNodeCache(tt))
+            memset(luauCompactNodeCache(tt->node, size), 0, size_t(size) * sizeof(uint32_t));
 #endif
         for (int i = 0; i < size; ++i)
         {
@@ -1947,6 +2175,16 @@ static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
     for (int i = 0; i < size; ++i)
         if (!ttisnil(gval(gnode(t, i))) && ++compactLive > size / 4)
             return;
+#endif
+#if LUAU_T24_LAZY_COMPACT_PLANE_ACTIVE
+    // Freeze is permitted to skip this optimization on allocation failure.
+    if (!tryEnsureCompactNodeCache(L, t))
+        return;
+    // Observers ran before the allocation was published. If they altered the
+    // shape or admission contract, leave the index unpublished.
+    if (sizenode(t) != size || !t->readonly || t->metatable ||
+        (ttistable(registry(L)) && hvalue(registry(L)) == t))
+        return;
 #endif
     int live = 0;
     unsigned next = unsigned(size);
