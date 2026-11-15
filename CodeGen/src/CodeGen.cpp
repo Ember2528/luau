@@ -1,4 +1,7 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+#if defined(LUAU_T24_PACKED_NODE) && !defined(LUAU_T24_PACKED_NODE_NATIVE_RESEARCH)
+#error "Experimental compact hash node is interpreter-only; native lowering has not been audited"
+#endif
 #include "Luau/CodeGen.h"
 
 #include "CodeGenLower.h"
@@ -26,6 +29,7 @@
 
 #include <memory>
 #include <optional>
+#include <cstring>
 
 #if defined(CODEGEN_TARGET_X64)
 #ifdef _MSC_VER
@@ -191,8 +195,60 @@ unsigned int getCpuFeaturesX64()
 }
 #endif
 
+#if defined(LUAU_T24_PACKED_NODE)
+// Native guards interpret this bitfield as a 32-bit integer with the tag in
+// the low nibble. C++ leaves bitfield allocation and signed representation
+// implementation-defined, so size and offset checks alone are insufficient.
+static bool compactNodeNativeLayoutSupported()
+{
+    static_assert(sizeof(((TValue*)nullptr)->nodekey) == sizeof(uint32_t), "unexpected node metadata size");
+    for (unsigned tag = 0; tag < 16; ++tag)
+    {
+        for (int bit = -2; bit < 27; ++bit)
+        {
+            int next = bit == -2 ? 0 : bit == -1 ? -1 : (1 << bit);
+            for (int sign = 0; sign < 2; ++sign)
+            {
+                int testedNext = sign ? -next : next;
+                LuaNode node{};
+                node.val.nodekey.tt = tag;
+                node.val.nodekey.next = testedNext;
+                uint32_t word = 0;
+                std::memcpy(&word, &node.val.nodekey, sizeof(word));
+#if defined(LUAU_T24_PACKED_NODE_TEST_FORCE_LAYOUT_REJECT)
+                word ^= 0x10u; // simulate an incompatible chain encoding
+#endif
+                uint32_t expected = ((uint32_t(testedNext) & 0x0fffffffu) << 4) | tag;
+                if (word != expected || node.val.nodekey.tt != tag || node.val.nodekey.next != testedNext)
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+#endif
+
 bool isSupported()
 {
+#if LUA_VECTOR_SIZE == 4
+    if (LUA_EXTRA_SIZE != 2)
+        return false;
+
+    if (sizeof(TValue) != 24)
+        return false;
+
+#if defined(LUAU_T24_PACKED_NODE)
+    if (sizeof(LuaNode) != 40)
+#else
+    if (sizeof(LuaNode) != 48)
+#endif
+        return false;
+
+#if defined(LUAU_T24_PACKED_NODE)
+    if (!compactNodeNativeLayoutSupported())
+        return false;
+#endif
+#else
     if (LUA_EXTRA_SIZE != 1)
         return false;
 
@@ -201,6 +257,7 @@ bool isSupported()
 
     if (sizeof(LuaNode) != 32)
         return false;
+#endif
 
     // Windows CRT uses stack unwinding in longjmp so we have to use unwind data; on other platforms, it's only necessary for C++ EH.
 #if defined(_WIN32)

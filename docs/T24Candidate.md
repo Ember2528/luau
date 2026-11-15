@@ -35,3 +35,18 @@ hashes, reset policy, compact representation, metadata ownership/iteration,
 insertion and allocation refinements, copying, selection and string reads.
 Representation and callback/OOM ownership transactions remain coherent commits.
 Rebase those before replaying the native suffix.
+
+## Native suffix
+
+After the layout, semantic-vector IR, producer and separate-tag correctness
+layers, T24 native execution is enabled only after validating its compact
+bitfield encoding. Later optimizations remain separate commits.
+
+```sh
+build/t24/Luau.Conformance --test-suite=Conformance --codegen
+build/t24/luau --codegen program.luau
+```
+
+The full profile has 42 definitions. The profile does not force global runtime
+flags or adaptive compilation. The measured static policy uses ColdFunctions,
+runtimeFeedback=false and no per-VM runtime recompilation.
