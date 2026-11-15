@@ -260,6 +260,8 @@ void jumpOnNumberCmp(AssemblyBuilderX64& build, RegisterX64 tmp, OperandX64 lhs,
 
 ConditionX64 getConditionInt(IrCondition cond);
 
+// Add index * sizeof(LuaNode) to node, clobbering index. The registers must not alias.
+void addLuaNodeIndex(AssemblyBuilderX64& build, RegisterX64 node, RegisterX64 index);
 void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 node, RegisterX64 table, int pcpos);
 void convertNumberToIndexOrJump(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 numd, RegisterX64 numi, Label& label);
 

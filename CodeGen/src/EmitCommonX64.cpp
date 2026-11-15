@@ -130,6 +130,25 @@ ConditionX64 getConditionInt(IrCondition cond)
     }
 }
 
+void addLuaNodeIndex(AssemblyBuilderX64& build, RegisterX64 node, RegisterX64 index)
+{
+    CODEGEN_ASSERT(node != qwordReg(index));
+
+#if defined(LUAU_T24_NATIVE_NODE_ADDRESS_RESEARCH)
+    if constexpr (sizeof(LuaNode) == 40)
+    {
+        // Keep the dependent load off the integer multiply: 40*i = (5*i)*8.
+        RegisterX64 wideIndex = qwordReg(index);
+        build.lea(wideIndex, addr[wideIndex + wideIndex * 4]);
+        build.lea(node, addr[node + wideIndex * 8]);
+        return;
+    }
+#endif
+
+    scaleLuaNodeIndex(build, index);
+    build.add(node, qwordReg(index));
+}
+
 void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 node, RegisterX64 table, int pcpos)
 {
     CODEGEN_ASSERT(tmp != node);
@@ -143,8 +162,7 @@ void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, Regist
     build.and_(byteReg(tmp), byte[table + offsetof(LuaTable, nodemask8)]);
 
     // LuaNode* n = &h->node[slot];
-    scaleLuaNodeIndex(build, dwordReg(tmp));
-    build.add(node, tmp);
+    addLuaNodeIndex(build, node, dwordReg(tmp));
 }
 
 void convertNumberToIndexOrJump(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 numd, RegisterX64 numi, Label& label)

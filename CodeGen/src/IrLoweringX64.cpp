@@ -146,8 +146,20 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             if (dwordReg(inst.regX64) != regOp(OP_B(inst)))
                 build.mov(dwordReg(inst.regX64), regOp(OP_B(inst)));
 
-            scaleTValueIndex(build, dwordReg(inst.regX64));
-            build.add(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuaTable, array)]);
+#if defined(LUAU_T24_NATIVE_ARRAY_ADDRESS_RESEARCH)
+            if constexpr (sizeof(TValue) == 24)
+            {
+                ScopedRegX64 array{regs, SizeX64::qword};
+                build.mov(array.reg, qword[regOp(OP_A(inst)) + offsetof(LuaTable, array)]);
+                build.lea(inst.regX64, addr[inst.regX64 + inst.regX64 * 2]);
+                build.lea(inst.regX64, addr[array.reg + inst.regX64 * 8]);
+            }
+            else
+#endif
+            {
+                scaleTValueIndex(build, dwordReg(inst.regX64));
+                build.add(inst.regX64, qword[regOp(OP_A(inst)) + offsetof(LuaTable, array)]);
+            }
         }
         else if (OP_B(inst).kind == IrOpKind::Constant)
         {
@@ -191,8 +203,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cmp(byteReg(inst.regX64), byte[table + offsetof(LuaTable, lsizenode)]);
             build.jcc(ConditionX64::AboveEqual, small);
             build.mov(inst.regX64, qword[table + offsetof(LuaTable, node)]);
-            scaleLuaNodeIndex(build, tmp.reg);
-            build.add(inst.regX64, tmp.reg);
+            addLuaNodeIndex(build, inst.regX64, tmp.reg);
             build.jmp(done);
             build.setLabel(small);
             getTableNodeAtCachedSlot(build, tmp.reg, inst.regX64, table, uintOp(OP_B(inst)));
@@ -222,8 +233,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.shl(dwordReg(tmp.reg), byteReg(shiftTmp.reg));
         build.dec(dwordReg(tmp.reg));
         build.and_(dwordReg(tmp.reg), uintOp(OP_B(inst)));
-        scaleLuaNodeIndex(build, tmp.reg);
-        build.add(inst.regX64, tmp.reg);
+        addLuaNodeIndex(build, inst.regX64, tmp.reg);
         break;
     };
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
@@ -2597,6 +2607,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         Label& mismatch = mismatchOp.kind == IrOpKind::Undef ? abort : labelOp(mismatchOp);
 
         ScopedRegX64 tmp{regs, SizeX64::qword};
+
 
         // Check if node key tag is a string
         build.mov(dwordReg(tmp.reg), luauNodeKeyTagOperand(regOp(OP_A(inst))));
