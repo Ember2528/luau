@@ -758,6 +758,13 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
 #endif
 );
 
+#if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
+#if !LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#error "Vector migration specialization requires the compact cache plane"
+#endif
+static TValue* reinsertvector(lua_State* L, LuaTable* t, const LuaNode* old, uint32_t oldVectorCache, uint32_t* destinationCache);
+#endif
+
 static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 {
     invalidateFrozenHashIndex(t);
@@ -868,12 +875,26 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         }
     }
 
+#if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
+    // No allocation or recursive resize occurs during migration. Keep both
+    // planes rooted in their respective node arrays until the old array dies.
+    uint32_t* destinationCache = nhsize ? luauCompactNodeCache(newnode, nhsize) : nullptr;
+    const uint32_t* oldCache = oldnode != dummynode ? luauCompactNodeCache(oldnode, oldsizenode) : nullptr;
+#endif
+
     // re-insert elements from hash part
     for (int i = oldsizenode - 1; i >= 0; i--)
     {
         LuaNode* old = oldnode + i;
         if (!ttisnil(gval(old)))
         {
+#if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
+            if (luauNodeKeyType(old) == LUA_TVECTOR)
+            {
+                setobjt2t(L, reinsertvector(L, t, old, oldCache[i], destinationCache), gval(old));
+                continue;
+            }
+#endif
             TValue ok;
             getnodekey(L, &ok, old);
             setobjt2t(L, reinsertkey(L, t, &ok, true, &old->key
@@ -1316,6 +1337,10 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
 #endif
 )
 {
+#if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
+    LUAU_ASSERT(!ttisvector(key)); // Hash vectors use reinsertvector; array migrants are numbers.
+    (void)oldVectorCache;
+#endif
     if (checkarraypart && ttisnumber(key))
     {
         int k;
@@ -1328,7 +1353,7 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
 #if LUAU_T24_NUMERIC_KEY_HASH
     bool numeric = ttisnumber(key);
     uint32_t h = numeric ? (oldkey ? numericKeyHash(oldkey) : numericHash(nvalue(key))) : 0;
-#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && !defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
     uint32_t vh = 0;
     if (ttisvector(key))
     {
@@ -1381,7 +1406,7 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
     if (numeric)
         setNumericKeyHash(gkey(mp), h);
 #endif
-#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && !defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
     if (ttisvector(key))
         luauCompactNodeCache(t->node, sizenode(t))[mp - t->node] = (vh & kCompactVectorHashMask) | kCompactVectorHashMarker;
 #endif
@@ -1389,6 +1414,59 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
     LUAU_ASSERT(ttisnil(gval(mp)));
     return gval(mp);
 }
+
+#if defined(LUAU_T24_COMPACT_VECTOR_REINSERT_RESEARCH)
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+extern "C" { uint64_t compactVectorDirectMigrants = 0; }
+#endif
+// Vector keys cannot move into the array part or require a GC key barrier.
+// Copy their full payload directly; cold words left by frozen-position
+// ownership are misses, not usable hashes.
+static TValue* reinsertvector(lua_State* L, LuaTable* t, const LuaNode* old, uint32_t oldVectorCache, uint32_t* destinationCache)
+{
+    LUAU_ASSERT(luauNodeKeyType(old) == LUA_TVECTOR && t->node != dummynode && destinationCache);
+    uint32_t hash;
+    if (oldVectorCache & kCompactVectorHashMarker)
+    {
+        hash = oldVectorCache & kCompactVectorHashMask;
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+        ++compactVectorCacheReuse;
+        ++compactVectorRehashReuse;
+#endif
+    }
+    else
+    {
+        hash = vectorHash(old->key.value.v);
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+        ++compactVectorCacheMiss;
+#endif
+    }
+
+    int slot = lmod(hash, sizenode(t));
+    LuaNode* mp = gnode(t, slot);
+    if (!ttisnil(gval(mp)))
+    {
+        LuaNode* freeNode = getfreepos(t);
+        LUAU_ASSERT(freeNode); // The resize target has room; migration never grows recursively.
+#if defined(LUAU_T24_COMPACT_SLOT_RESEARCH)
+        slot = newcollidingvectorindexed(L, t, slot, t->lastfree);
+        mp = gnode(t, slot);
+#else
+        mp = newcollidingkey<false, true>(L, t, mp, freeNode);
+        slot = int(mp - t->node);
+#endif
+    }
+
+    mp->key.value = old->key.value;
+    luauNodeKeyType(mp) = LUA_TVECTOR;
+    destinationCache[slot] = (hash & kCompactVectorHashMask) | kCompactVectorHashMarker;
+#if defined(LUAU_T24_COMPACT_CACHE_TEST_COUNTERS)
+    ++compactVectorDirectMigrants;
+#endif
+    LUAU_ASSERT(ttisnil(gval(mp)));
+    return gval(mp);
+}
+#endif
 
 /*
 ** search function for integers
