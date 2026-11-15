@@ -860,6 +860,36 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
     LuauBytecodeType recordedA = FFlag::LuauCodegenRuntimeFeedback ? getRecordedVmRegType(build, bcTypes.a, pcpos, rb) : LBC_TYPE_ANY;
     LuauBytecodeType recordedB = FFlag::LuauCodegenRuntimeFeedback ? getRecordedVmRegType(build, bcTypes.b, pcpos, rc) : LBC_TYPE_ANY;
 
+#if defined(LUAU_T24_ARITH_FEEDBACK_OVERRIDE_RESEARCH)
+    if (FFlag::LuauCodegenRuntimeFeedback)
+    {
+        // Inferred bytecode result types can describe numeric arithmetic even
+        // when a metamethod returned a table. Prefer observed monomorphic tags
+        // for this speculative arithmetic decision. Resetting only the local
+        // conflicting expectation keeps runtime guards/fallbacks authoritative;
+        // function parameter guards and bytecode type metadata are unchanged.
+        if (rb != -1)
+        {
+            LuauBytecodeType actual = getTagFeedback(build.function, pcpos, rb);
+            if (actual != LBC_TYPE_ANY)
+            {
+                recordedA = actual;
+                if (actual != bcTypes.a)
+                    bcTypes.a = LBC_TYPE_ANY;
+            }
+        }
+        if (rc != -1)
+        {
+            LuauBytecodeType actual = getTagFeedback(build.function, pcpos, rc);
+            if (actual != LBC_TYPE_ANY)
+            {
+                recordedB = actual;
+                if (actual != bcTypes.b)
+                    bcTypes.b = LBC_TYPE_ANY;
+            }
+        }
+    }
+#endif
 
     bool vectorA = bcTypes.a == LBC_TYPE_VECTOR || (FFlag::LuauCodegenRuntimeFeedback && recordedA == LBC_TYPE_VECTOR);
     bool vectorB = bcTypes.b == LBC_TYPE_VECTOR || (FFlag::LuauCodegenRuntimeFeedback && recordedB == LBC_TYPE_VECTOR);
