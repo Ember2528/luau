@@ -422,6 +422,44 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterA64 temp2 = regs.allocTemp(KindA64::w);
         RegisterA64 temp2x = castReg(KindA64::x, temp2);
 
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+        unsigned opcode = function.proto && uintOp(OP_B(inst)) < unsigned(function.proto->sizecode)
+            ? LUAU_INSN_OP(function.proto->code[uintOp(OP_B(inst))]) : ~0u;
+        if (opcode == LOP_GETTABLEKS || opcode == LOP_GETUDATAKS)
+        {
+            Label small, done;
+            build.ldrb(temp1w, mem(regOp(OP_A(inst)), offsetof(LuaTable, lsizenode)));
+            build.cmp(temp1w, uint16_t(8));
+            build.b(ConditionA64::UnsignedLessEqual, small);
+            build.mov(temp2, -1);
+            build.lsl(temp2, temp2, temp1w);
+            build.ldr(temp1w, tempAddr(OP_C(inst), LUAU_TVALUE_EXTRA_OFFSET + sizeof(int), temp1));
+            build.bic(temp2, temp1w, temp2);
+            build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
+            if constexpr (sizeof(LuaNode) == 48)
+                build.add(temp2x, temp2x, temp2x, 1);
+            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+            build.b(done);
+            build.setLabel(small);
+
+            if (uintOp(OP_B(inst)) <= AddressA64::kMaxOffset)
+                build.ldr(temp1w, mem(rCode, uintOp(OP_B(inst)) * sizeof(Instruction)));
+            else
+            {
+                build.mov(temp1, uintOp(OP_B(inst)) * sizeof(Instruction));
+                build.ldr(temp1w, mem(rCode, temp1));
+            }
+            build.ldrb(temp2, mem(regOp(OP_A(inst)), offsetof(LuaTable, nodemask8)));
+            build.and_(temp2, temp2, temp1w, -24);
+            build.ldr(inst.regA64, mem(regOp(OP_A(inst)), offsetof(LuaTable, node)));
+            if constexpr (sizeof(LuaNode) == 48)
+                build.add(temp2x, temp2x, temp2x, 1);
+            build.add(inst.regA64, inst.regA64, temp2x, sizeof(LuaNode) == 48 ? 4 : kLuaNodeSizeLog2);
+            build.setLabel(done);
+            break;
+        }
+#endif
+
         // note: since the stride of the load is the same as the destination register size, we can range check the array index, not the byte offset
         if (uintOp(OP_B(inst)) <= AddressA64::kMaxOffset)
             build.ldr(temp1w, mem(rCode, uintOp(OP_B(inst)) * sizeof(Instruction)));

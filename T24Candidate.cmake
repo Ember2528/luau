@@ -1,6 +1,6 @@
 # This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 
-# Interpreter definitions are shared by the VM, compiler and private-header consumers.
+# The interpreter, compiler and private-header consumers share these ABI definitions.
 set(LUAU_T24_CANDIDATE_DEFINITIONS
     LUA_VECTOR_SIZE=4
     LUAU_T24_STRING_CONSTANT_SLOT_RESEARCH=1
@@ -23,4 +23,9 @@ set(LUAU_T24_CANDIDATE_DEFINITIONS
     LUAU_T24_SCALAR_PLANE_WRITES_RESEARCH=1
     LUAU_T24_STRING_LOOKUP_RESEARCH=1
     LUAU_T24_STRING_GET_RESEARCH=1
+)
+
+# Native features follow the complete interpreter series.
+list(APPEND LUAU_T24_CANDIDATE_DEFINITIONS
+    LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH=1
 )

@@ -68,6 +68,12 @@ namespace Luau
 namespace CodeGen
 {
 
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH) && defined(LUAU_T24_STRING_CONSTANT_NATIVE_TEST_COUNTERS)
+// Test-only witness; not present in timing builds.
+unsigned nativeStringSlotFallbackCount = 0;
+unsigned nativeSingletonMissCount = 0;
+#endif
+
 bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 {
     int sizearray = h->sizearray;
@@ -561,6 +567,9 @@ const Instruction* executeSETGLOBAL(lua_State* L, const Instruction* pc, StkId b
 
 const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId base, TValue* k)
 {
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH) && defined(LUAU_T24_STRING_CONSTANT_NATIVE_TEST_COUNTERS)
+    ++nativeStringSlotFallbackCount;
+#endif
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
     Instruction insn = *pc++;
     int op = LUAU_INSN_OP(insn);
@@ -649,12 +658,29 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
 
         if (!h->metatable)
         {
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+            // A one-node hash with a nil value contains no live string key.
+            // No absence is cached: mutations and metatables are checked on
+            // every read, and array entries cannot hold string keys.
+            if (h->lsizenode == 0 && ttisnil(gval(gnode(h, 0))))
+            {
+#if defined(LUAU_T24_STRING_CONSTANT_NATIVE_TEST_COUNTERS)
+                ++nativeSingletonMissCount;
+#endif
+                setnilvalue(ra);
+                return pc;
+            }
+#endif
             // fast-path: value is not in expected slot, but the table lookup doesn't involve metatable
             const TValue* res = luaH_getstr(h, tsvalue(kv));
 
             if (res != luaO_nilobject)
             {
                 int cachedslot = gval2slot(h, res);
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+                if (h->lsizenode > 8)
+                    luauSetStringSlotHint(kv, cachedslot);
+#endif
                 // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                 VM_PATCH_C(pc - 2, cachedslot);
             }

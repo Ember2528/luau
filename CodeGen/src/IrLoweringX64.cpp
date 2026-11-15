@@ -165,6 +165,40 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     case IrCmd::GET_SLOT_NODE_ADDR:
     {
+#if LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+        // Restrict this lowering to field reads. Other slot instructions keep
+        // the original bytecode hint and their existing fallback policy.
+        unsigned opcode = function.proto && uintOp(OP_B(inst)) < unsigned(function.proto->sizecode)
+            ? LUAU_INSN_OP(function.proto->code[uintOp(OP_B(inst))]) : ~0u;
+        if (opcode == LOP_GETTABLEKS || opcode == LOP_GETUDATAKS)
+        {
+            // Check the full hint's range without reserving CL.  A hint
+            // outside the current hash size falls back to the bytecode slot.
+            inst.regX64 = regs.allocReg(SizeX64::qword, index);
+            ScopedRegX64 tmp{regs, SizeX64::qword};
+            RegisterX64 table = regOp(OP_A(inst));
+            Label small, done;
+            build.cmp(byte[table + offsetof(LuaTable, lsizenode)], 8);
+            build.jcc(ConditionX64::BelowEqual, small);
+            build.mov(dwordReg(tmp.reg), dword[rConstants + vmConstOp(OP_C(inst)) * sizeof(TValue) + LUAU_TVALUE_EXTRA_OFFSET + sizeof(int)]);
+            // BSR is undefined for zero, which is a valid initial hint: use
+            // the bytecode slot in that case. A set top bit outside the
+            // table's range proves the complete unsigned hint is invalid.
+            build.test(dwordReg(tmp.reg), dwordReg(tmp.reg));
+            build.jcc(ConditionX64::Zero, small);
+            build.bsr(dwordReg(inst.regX64), dwordReg(tmp.reg));
+            build.cmp(byteReg(inst.regX64), byte[table + offsetof(LuaTable, lsizenode)]);
+            build.jcc(ConditionX64::AboveEqual, small);
+            build.mov(inst.regX64, qword[table + offsetof(LuaTable, node)]);
+            scaleLuaNodeIndex(build, tmp.reg);
+            build.add(inst.regX64, tmp.reg);
+            build.jmp(done);
+            build.setLabel(small);
+            getTableNodeAtCachedSlot(build, tmp.reg, inst.regX64, table, uintOp(OP_B(inst)));
+            build.setLabel(done);
+            break;
+        }
+#endif
         inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
         ScopedRegX64 tmp{regs, SizeX64::qword};
