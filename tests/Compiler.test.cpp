@@ -4728,7 +4728,18 @@ L3: RETURN R0 1
 )"
     );
 
-    // currently we assume a single value return to avoid dealing with stack resizing
+    // The tail path retains the slow call if direct vararg
+    // selection cannot satisfy the checked result/stack limits.
+#if defined(LUAU_T24_VARARG_SELECT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    CHECK_EQ("\n" + compileFunction0("return select('#', ...)"), R"(
+LOADK R1 K0 ['#']
+FASTCALL1 57 R1 L0
+GETIMPORT R0 2 [select]
+GETVARARGS R2 -1
+CALL R0 -1 -1
+L0: RETURN R0 -1
+)");
+#else
     CHECK_EQ("\n" + compileFunction0("return select('#', ...)"), R"(
 GETIMPORT R0 1 [select]
 LOADK R1 K2 ['#']
@@ -4736,6 +4747,7 @@ GETVARARGS R2 -1
 CALL R0 -1 -1
 RETURN R0 -1
 )");
+#endif
 
     // note that select with a non-variadic second argument doesn't get optimized
     CHECK_EQ("\n" + compileFunction0("return select('#')"), R"(

@@ -151,6 +151,12 @@ assert(selectmany(-2, 10, 20, 30) == "20,30")
 assert(selectone('3', 10, 20, 30) == 30)
 assert(selectmany('3', 10, 20, 30) == "30")
 
+-- Fractional indices truncate; selection preserves nils and vector payloads.
+assert(selectone(1.75, 10, 20, 30) == 10)
+assert(selectmany(-1.75, 10, 20, 30) == "30")
+assert(selectone(2, 10, nil, 30) == nil)
+assert(selectone(-1, nil, vector.create(1, 2, 3, 7)) == vector.create(1, 2, 3, 7))
+
 -- varargs for main chunks
 f = loadstring[[ return {...} ]]
 x = f(2,3)

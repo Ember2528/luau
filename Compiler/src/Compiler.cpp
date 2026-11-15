@@ -809,7 +809,11 @@ struct Compiler
 
     void compileExprSelectVararg(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop, bool multRet, uint8_t regs)
     {
+#if defined(LUAU_T24_VARARG_SELECT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        LUAU_ASSERT(targetCount == 1 || (multRet && targetTop));
+#else
         LUAU_ASSERT(targetCount == 1);
+#endif
         LUAU_ASSERT(!expr->self);
         LUAU_ASSERT(expr->args.size == 2 && expr->args.data[1]->is<AstExprVarargs>());
 
@@ -1480,9 +1484,14 @@ struct Compiler
 
         if (bfid == LBF_SELECT_VARARG)
         {
-            // Optimization: compile select(_, ...) as FASTCALL1; the builtin will read variadic arguments directly
-            // note: for now we restrict this to single-return expressions since our runtime code doesn't deal with general cases
+            // Optimization: compile select(_, ...) as FASTCALL1 so the builtin
+            // can read incoming varargs directly. The T24 path also supports
+            // a checked multret result range; the ordinary path is single-only.
+#if defined(LUAU_T24_VARARG_SELECT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+            if (targetCount == 1 || multRet)
+#else
             if (multRet == false && targetCount == 1)
+#endif
                 return compileExprSelectVararg(expr, target, targetCount, targetTop, multRet, regs);
             else
                 bfid = -1;

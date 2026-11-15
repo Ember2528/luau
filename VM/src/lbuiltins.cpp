@@ -1194,6 +1194,104 @@ static int luauF_countrz(lua_State* L, StkId res, TValue* arg0, int nresults, St
 
 static int luauF_select(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
+#if defined(LUAU_T24_VARARG_SELECT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+    // Common single results keep their cheap entry checks ahead of the
+    // general negative/multret path.
+    if (nparams == 1 && nresults == 1)
+    {
+        int n = cast_int(L->base - L->ci->func) - L->ci->p->numparams - 1;
+
+        if (ttisnumber(arg0))
+        {
+            double index = nvalue(arg0);
+#if LUAU_T24_SELECT_SSE2
+            // The intrinsic avoids an out-of-range C++ cast. With masked
+            // FP exceptions its integer-indefinite result cannot pass this
+            // unsigned bound for a nonnegative incoming argument count.
+            int first = _mm_cvttsd_si32(_mm_set_sd(index));
+            unsigned offset = unsigned(first) - 1u;
+            if (offset < unsigned(n))
+            {
+                setobj2s(L, res, L->base - n + offset);
+                return 1;
+            }
+#else
+            // The incoming argument count bounds this conversion to valid
+            // stack indices, without the general int-range/negative handling.
+            if (index >= 1.0 && index < double(n) + 1.0)
+            {
+                int first = int(index);
+                setobj2s(L, res, L->base - n + first - 1);
+                return 1;
+            }
+#endif
+        }
+        else if (ttisstring(arg0) && *svalue(arg0) == '#')
+        {
+            setnvalue(res, double(n));
+            return 1;
+        }
+    }
+
+    if (nparams == 1 && (nresults == 1 || nresults == LUA_MULTRET))
+    {
+        int n = cast_int(L->base - L->ci->func) - L->ci->p->numparams - 1;
+
+        if (ttisnumber(arg0))
+        {
+            double index = nvalue(arg0);
+            if (!(index >= double(INT_MIN) && index <= double(INT_MAX)))
+                return -1;
+
+            int first = int(index);
+            if (first < 0)
+                first = n + first + 1;
+            else if (first > n)
+                first = n + 1;
+
+            if (first < 1)
+                return -1; // The ordinary call reports the index error.
+
+            int count = n - first + 1;
+            if (nresults == 1)
+            {
+                if (count > 0)
+                {
+                    setobj2s(L, res, L->base - n + first - 1);
+                }
+                else
+                {
+                    setnilvalue(res);
+                }
+                return 1;
+            }
+
+            if (count > cast_int(L->stack_last - res) || count + nparams > LUAI_MAXCSTACK)
+                return -1;
+
+            // Incoming varargs end at base; result registers start at/above it.
+            const TValue* source = L->base - n + first - 1;
+#if defined(LUAU_T24_COPY_VARARGS_MULTRET_ONLY_RESEARCH)
+            if (count >= 8)
+            {
+                memcpy(res, source, size_t(count) * sizeof(TValue));
+                for (int i = 0; i < count; ++i)
+                    checkliveness(L->global, res + i);
+            }
+            else
+#endif
+                for (int i = 0; i < count; ++i)
+                    setobj2s(L, res + i, source + i);
+            expandstacklimit(L, res + count);
+            return count;
+        }
+        else if (ttisstring(arg0) && *svalue(arg0) == '#')
+        {
+            setnvalue(res, double(n));
+            return 1;
+        }
+    }
+#else
     if (nparams == 1 && nresults == 1)
     {
         int n = cast_int(L->base - L->ci->func) - L->ci->p->numparams - 1;
@@ -1216,6 +1314,7 @@ static int luauF_select(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
             return 1;
         }
     }
+#endif
 
     return -1;
 }
