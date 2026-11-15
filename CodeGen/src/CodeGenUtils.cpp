@@ -97,7 +97,35 @@ bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 
     int sizenode = 1 << h->lsizenode;
 
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+    if (LUAU_UNLIKELY(h->readonly & 4) && unsigned(index - sizearray) < unsigned(sizenode))
+        index = sizearray + luaH_frozenhashskip(h, index - sizearray);
+#endif
+
     // then we advance index through the hash portion
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+    if (unsigned(index - sizearray) < unsigned(sizenode))
+    {
+        // This pointer is local to the callback-free scan; only the numeric
+        // cursor survives and each call reacquires the current node vector.
+        LuaNode* n = h->node + (index - sizearray);
+        LuaNode* end = h->node + sizenode;
+        do
+        {
+            if (!ttisnil(gval(n)))
+            {
+                setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
+                getnodekey(L, ra + 3, n);
+                setobj(L, ra + 4, gval(n));
+
+                return true;
+            }
+
+            ++index;
+            ++n;
+        } while (n != end);
+    }
+#else
     while (unsigned(index - h->sizearray) < unsigned(sizenode))
     {
         LuaNode* n = &h->node[index - sizearray];
@@ -113,6 +141,7 @@ bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 
         index++;
     }
+#endif
 
     return false;
 }
@@ -122,7 +151,35 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
     int sizearray = h->sizearray;
     int sizenode = 1 << h->lsizenode;
 
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+    if (LUAU_UNLIKELY(h->readonly & 4) && unsigned(index - sizearray) < unsigned(sizenode))
+        index = sizearray + luaH_frozenhashskip(h, index - sizearray);
+#endif
+
     // then we advance index through the hash portion
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+    if (unsigned(index - sizearray) < unsigned(sizenode))
+    {
+        // This pointer is local to the callback-free scan; only the numeric
+        // cursor survives and each call reacquires the current node vector.
+        LuaNode* n = h->node + (index - sizearray);
+        LuaNode* end = h->node + sizenode;
+        do
+        {
+            if (!ttisnil(gval(n)))
+            {
+                setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
+                getnodekey(L, ra + 3, n);
+                setobj(L, ra + 4, gval(n));
+
+                return true;
+            }
+
+            ++index;
+            ++n;
+        } while (n != end);
+    }
+#else
     while (unsigned(index - sizearray) < unsigned(sizenode))
     {
         LuaNode* n = &h->node[index - sizearray];
@@ -138,6 +195,7 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 
         index++;
     }
+#endif
 
     return false;
 }
