@@ -56,6 +56,35 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     switch (inst.cmd)
     {
+    case IrCmd::SELECT_VEC:
+    case IrCmd::ADD_VEC:
+    case IrCmd::SUB_VEC:
+    case IrCmd::MUL_VEC:
+    case IrCmd::DIV_VEC:
+    case IrCmd::IDIV_VEC:
+    case IrCmd::MULADD_VEC:
+    case IrCmd::UNM_VEC:
+    case IrCmd::MIN_VEC:
+    case IrCmd::MAX_VEC:
+    case IrCmd::FLOOR_VEC:
+    case IrCmd::CEIL_VEC:
+    case IrCmd::ABS_VEC:
+    case IrCmd::DOT_VEC:
+    case IrCmd::EXTRACT_VEC:
+    case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::TAG_VECTOR:
+    case IrCmd::UNTAG_VECTOR:
+    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::BUFFER_WRITEVECTOR:
+    case IrCmd::LOAD_VEC:
+    case IrCmd::STORE_VEC:
+    case IrCmd::STORE_VEC_COMPONENTS:
+    case IrCmd::BUILD_VEC:
+    case IrCmd::TVALUE_TO_VEC:
+    case IrCmd::GET_UPVALUE_ADDR:
+        // Added IR forms stay dormant until this backend is installed.
+        regs.error = true;
+        return;
     case IrCmd::LOAD_TAG:
         inst.regX64 = regs.allocReg(SizeX64::dword, index);
 
@@ -278,7 +307,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
         break;
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 0), OP_B(inst));
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 1), OP_C(inst));
         storeFloat(luauRegValueVector(vmRegOp(OP_A(inst)), 2), OP_D(inst));
@@ -1175,7 +1204,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         break;
     }
-    case IrCmd::SELECT_VEC:
+    case IrCmd::LEGACY_SELECT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_C(inst), OP_D(inst)});
 
@@ -1220,7 +1249,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.setLabel(exit);
         break;
     }
-    case IrCmd::ADD_VEC:
+    case IrCmd::LEGACY_ADD_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1233,7 +1262,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vaddps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::SUB_VEC:
+    case IrCmd::LEGACY_SUB_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1246,7 +1275,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vsubps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::MUL_VEC:
+    case IrCmd::LEGACY_MUL_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1259,7 +1288,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vmulps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::DIV_VEC:
+    case IrCmd::LEGACY_DIV_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1272,7 +1301,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vdivps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::IDIV_VEC:
+    case IrCmd::LEGACY_IDIV_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1286,7 +1315,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vroundps(inst.regX64, inst.regX64, RoundingModeX64::RoundToNegativeInfinity);
         break;
     }
-    case IrCmd::MULADD_VEC:
+    case IrCmd::LEGACY_MULADD_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
         ScopedRegX64 tmp1{regs};
@@ -1312,14 +1341,14 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         break;
     }
-    case IrCmd::UNM_VEC:
+    case IrCmd::LEGACY_UNM_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
         build.vxorpd(inst.regX64, regOp(OP_A(inst)), build.f32x4(-0.0, -0.0, -0.0, -0.0));
         break;
     }
-    case IrCmd::MIN_VEC:
+    case IrCmd::LEGACY_MIN_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1332,7 +1361,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vminps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::MAX_VEC:
+    case IrCmd::LEGACY_MAX_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1345,7 +1374,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vmaxps(inst.regX64, tmpa, tmpb);
         break;
     }
-    case IrCmd::FLOOR_VEC:
+    case IrCmd::LEGACY_FLOOR_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
@@ -1355,7 +1384,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToNegativeInfinity);
         break;
     }
-    case IrCmd::CEIL_VEC:
+    case IrCmd::LEGACY_CEIL_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
@@ -1365,7 +1394,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vroundps(inst.regX64, tmpa, RoundingModeX64::RoundToPositiveInfinity);
         break;
     }
-    case IrCmd::ABS_VEC:
+    case IrCmd::LEGACY_ABS_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
@@ -1375,7 +1404,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.vandps(inst.regX64, tmpa, build.u32x4(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff));
         break;
     }
-    case IrCmd::DOT_VEC:
+    case IrCmd::LEGACY_DOT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst), OP_B(inst)});
 
@@ -1411,7 +1440,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::EXTRACT_VEC:
+    case IrCmd::LEGACY_EXTRACT_VEC:
     {
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
@@ -1991,7 +2020,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.vcvtsd2ss(inst.regX64, inst.regX64, memRegDoubleOp(OP_A(inst)));
         break;
-    case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
 
         if (OP_A(inst).kind == IrOpKind::Constant)
@@ -2008,12 +2037,12 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.vpshufps(inst.regX64, regOp(OP_A(inst)), regOp(OP_A(inst)), 0b00'00'00'00);
         }
         break;
-    case IrCmd::TAG_VECTOR:
+    case IrCmd::LEGACY_TAG_VECTOR:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
         build.vpinsrd(inst.regX64, regOp(OP_A(inst)), build.i32(LUA_TVECTOR), 3);
         break;
-    case IrCmd::UNTAG_VECTOR:
+    case IrCmd::LEGACY_UNTAG_VECTOR:
         inst.regX64 = regs.allocRegOrReuse(SizeX64::xmmword, index, {OP_A(inst)});
 
         build.vandps(inst.regX64, regOp(OP_A(inst)), vectorAndMaskOp());
@@ -3306,7 +3335,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         storeFloat(dword[bufferAddrOp(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)))], OP_C(inst));
         break;
 
-    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_D(inst)) == 2 || intOp(OP_D(inst)) == 3);
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
@@ -3319,7 +3348,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::BUFFER_WRITEVECTOR:
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_E(inst)) == 2 || intOp(OP_E(inst)) == 3);
         RegisterX64 value = regOp(OP_C(inst));
@@ -3852,7 +3881,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     regs.currInstIdx = kInvalidInstIdx;
 
-    regs.freeLastUseRegs(inst, index);
+    regs.finishInst(inst, index);
 
     // Free register if there is no user of the result
     if (FFlag::LuauCodegenCmpAnySideEffecting && inst.lastUse == 0 && hasResult(inst.cmd))
@@ -4286,7 +4315,7 @@ RegisterX64 IrLoweringX64::vecOp(IrOp op, ScopedRegX64& tmp)
     // source that comes from memory or from tag instruction has .w = TVECTOR, which is denormal
     // to avoid performance degradation on some CPUs we mask this component to produce zero
     // otherwise we conservatively assume the vector is a result of a well formed math op so .w is a normal number or zero
-    if (source.cmd != IrCmd::LOAD_TVALUE && source.cmd != IrCmd::GET_UPVALUE && source.cmd != IrCmd::TAG_VECTOR)
+    if (source.cmd != IrCmd::LOAD_TVALUE && source.cmd != IrCmd::GET_UPVALUE && source.cmd != IrCmd::LEGACY_TAG_VECTOR)
         return regOp(op);
 
     tmp.alloc(SizeX64::xmmword);

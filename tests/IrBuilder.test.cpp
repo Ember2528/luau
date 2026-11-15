@@ -1563,7 +1563,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "SelectVector")
     IrOp unknownVec2 = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2));
     IrOp unknownVec3 = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(3));
 
-    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), build.inst(IrCmd::SELECT_VEC, unknownVec3, unknownVec3, unknownVec1, unknownVec2));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), build.inst(IrCmd::LEGACY_SELECT_VEC, unknownVec3, unknownVec3, unknownVec1, unknownVec2));
 
     build.inst(IrCmd::RETURN, build.constUint(0));
 
@@ -4912,12 +4912,12 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "TagVectorSkipErrorFix")
     IrOp a = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
     IrOp b = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(1));
 
-    IrOp mul = build.inst(IrCmd::TAG_VECTOR, build.inst(IrCmd::MUL_VEC, a, b));
+    IrOp mul = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_MUL_VEC, a, b));
 
-    IrOp t1 = build.inst(IrCmd::TAG_VECTOR, build.inst(IrCmd::ADD_VEC, mul, mul));
-    IrOp t2 = build.inst(IrCmd::TAG_VECTOR, build.inst(IrCmd::SUB_VEC, mul, mul));
+    IrOp t1 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_ADD_VEC, mul, mul));
+    IrOp t2 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_SUB_VEC, mul, mul));
 
-    IrOp t3 = build.inst(IrCmd::TAG_VECTOR, build.inst(IrCmd::DIV_VEC, t1, build.inst(IrCmd::UNM_VEC, t2)));
+    IrOp t3 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_DIV_VEC, t1, build.inst(IrCmd::LEGACY_UNM_VEC, t2)));
 
     build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), t3);
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constUint(1));
@@ -6064,14 +6064,14 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "IndirectFloatLoadExtractionMustRespectVersi
     IrOp x2 = build.inst(IrCmd::FLOAT_TO_NUM, build.inst(IrCmd::LOAD_FLOAT, build.vmReg(5), build.constInt(0)));
 
     IrOp xMin = build.inst(IrCmd::NUM_TO_FLOAT, build.inst(IrCmd::MIN_NUM, x1, x2));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(7), xMin, build.constDouble(0.0), build.constDouble(0.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(7), xMin, build.constDouble(0.0), build.constDouble(0.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(7), build.constTag(tvector));
 
     IrOp xMinVec = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(7), build.constInt(0), build.constTag(tvector));
     build.inst(IrCmd::STORE_TVALUE, build.vmReg(6), xMinVec);
 
     IrOp xMax = build.inst(IrCmd::NUM_TO_FLOAT, build.inst(IrCmd::MAX_NUM, x1, x2));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(7), xMax, build.constDouble(0.0), build.constDouble(0.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(7), xMax, build.constDouble(0.0), build.constDouble(0.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(7), build.constTag(tvector));
 
     IrOp xMaxVec = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(7), build.constInt(0), build.constTag(tvector));
@@ -7150,7 +7150,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverNumber")
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7171,9 +7171,9 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverVector")
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7194,7 +7194,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverVector")
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
@@ -7240,7 +7240,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverNil")
 
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnil));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7263,7 +7263,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverCombinedVector")
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(3.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
@@ -7288,9 +7288,9 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedVector")
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7315,7 +7315,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedNumber")
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7672,7 +7672,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncStoreVector")
     IrOp y = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(0), build.constInt(4));
     IrOp z = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(0), build.constInt(8));
 
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(1), x, y, z);
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(1), x, y, z);
     build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
     build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(2)), build.constTag(tnumber), build.vmExit(1));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
@@ -7931,7 +7931,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncVectorFullStore")
     build.beginBlock(block);
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
-    build.inst(IrCmd::STORE_VECTOR, build.vmReg(1), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(3.0));
+    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(1), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(3.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
     build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(20));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
@@ -8194,11 +8194,11 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "PackedBufferVectorLanes")
     build.beginBlock(build.block(IrBlockKind::Internal));
 
     IrOp vector = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
-    IrOp tagged = build.inst(IrCmd::TAG_VECTOR, vector);
-    IrOp untagged = build.inst(IrCmd::UNTAG_VECTOR, tagged);
-    IrOp duplicate = build.inst(IrCmd::UNTAG_VECTOR, untagged);
-    IrOp three = build.inst(IrCmd::DOT_VEC, tagged, duplicate, build.constInt(3));
-    IrOp four = build.inst(IrCmd::DOT_VEC, tagged, duplicate, build.constInt(4));
+    IrOp tagged = build.inst(IrCmd::LEGACY_TAG_VECTOR, vector);
+    IrOp untagged = build.inst(IrCmd::LEGACY_UNTAG_VECTOR, tagged);
+    IrOp duplicate = build.inst(IrCmd::LEGACY_UNTAG_VECTOR, untagged);
+    IrOp three = build.inst(IrCmd::LEGACY_DOT_VEC, tagged, duplicate, build.constInt(3));
+    IrOp four = build.inst(IrCmd::LEGACY_DOT_VEC, tagged, duplicate, build.constInt(4));
 
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(1), build.inst(IrCmd::FLOAT_TO_NUM, three));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(2), build.inst(IrCmd::FLOAT_TO_NUM, four));

@@ -330,13 +330,13 @@ static BuiltinImplResult translateBuiltinVectorLerp(IrBuilder& build, int nparam
         IrOp b = build.inst(IrCmd::LOAD_TVALUE, args);
         IrOp t = builtinLoadDouble(build, arg3);
 
-        IrOp tvec = build.inst(IrCmd::FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, t));
-        IrOp one = build.inst(IrCmd::FLOAT_TO_VEC, build.constDouble(1.0));
-        IrOp diff = build.inst(IrCmd::SUB_VEC, b, a);
+        IrOp tvec = build.inst(IrCmd::LEGACY_FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, t));
+        IrOp one = build.inst(IrCmd::LEGACY_FLOAT_TO_VEC, build.constDouble(1.0));
+        IrOp diff = build.inst(IrCmd::LEGACY_SUB_VEC, b, a);
 
-        IrOp res = build.inst(IrCmd::MULADD_VEC, diff, tvec, a);
-        IrOp ret = build.inst(IrCmd::SELECT_VEC, res, b, tvec, one);
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        IrOp res = build.inst(IrCmd::LEGACY_MULADD_VEC, diff, tvec, a);
+        IrOp ret = build.inst(IrCmd::LEGACY_SELECT_VEC, res, b, tvec, one);
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LEGACY_TAG_VECTOR, ret));
     }
 
     return {BuiltinImplType::Full, 1};
@@ -816,7 +816,7 @@ static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, i
             IrOp xf = build.inst(IrCmd::NUM_TO_FLOAT, x);
             IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
 
-            build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, build.constDouble(0.0));
+            build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(ra), xf, yf, build.constDouble(0.0));
         }
     }
     else
@@ -840,7 +840,7 @@ static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, i
             IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
             IrOp zf = build.inst(IrCmd::NUM_TO_FLOAT, z);
 
-            build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, zf);
+            build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(ra), xf, yf, zf);
         }
     }
 
@@ -1020,8 +1020,8 @@ static BuiltinImplResult translateBuiltinBufferReadVector(
     }
     else
     {
-        IrOp vec = build.inst(IrCmd::BUFFER_READVECTOR, buf, intIndex, build.constTag(LUA_TBUFFER), build.constInt(count));
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, vec));
+        IrOp vec = build.inst(IrCmd::LEGACY_BUFFER_READVECTOR, buf, intIndex, build.constTag(LUA_TBUFFER), build.constInt(count));
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LEGACY_TAG_VECTOR, vec));
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1069,7 +1069,7 @@ static BuiltinImplResult translateBuiltinBufferWriteVector(
     else
     {
         IrOp vec = build.inst(IrCmd::LOAD_TVALUE, arg3);
-        build.inst(IrCmd::BUFFER_WRITEVECTOR, buf, intIndex, vec, build.constTag(LUA_TBUFFER), build.constInt(count));
+        build.inst(IrCmd::LEGACY_BUFFER_WRITEVECTOR, buf, intIndex, vec, build.constTag(LUA_TBUFFER), build.constInt(count));
     }
 
     return {BuiltinImplType::Full, 0};
@@ -1114,7 +1114,7 @@ static BuiltinImplResult translateBuiltinVectorMagnitude(
     {
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
 
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, a);
+        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::LEGACY_DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::LEGACY_DOT_VEC, a, a);
         IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
 
         mag = build.inst(IrCmd::FLOAT_TO_NUM, mag);
@@ -1169,15 +1169,15 @@ static BuiltinImplResult translateBuiltinVectorNormalize(
     else
     {
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, a);
+        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::LEGACY_DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::LEGACY_DOT_VEC, a, a);
 
         IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
         IrOp inv = build.inst(IrCmd::DIV_FLOAT, build.constDouble(1.0f), mag);
-        IrOp invvec = build.inst(IrCmd::FLOAT_TO_VEC, inv);
+        IrOp invvec = build.inst(IrCmd::LEGACY_FLOAT_TO_VEC, inv);
 
-        IrOp result = build.inst(IrCmd::MUL_VEC, a, invvec);
+        IrOp result = build.inst(IrCmd::LEGACY_MUL_VEC, a, invvec);
 
-        result = build.inst(IrCmd::TAG_VECTOR, result);
+        result = build.inst(IrCmd::LEGACY_TAG_VECTOR, result);
 
         build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
     }
@@ -1246,7 +1246,7 @@ static BuiltinImplResult translateBuiltinVectorCross(IrBuilder& build, int npara
         IrOp y1x2 = build.inst(IrCmd::MUL_FLOAT, y1, x2);
         IrOp zr = build.inst(IrCmd::SUB_FLOAT, x1y2, y1x2);
 
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+        build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1290,7 +1290,7 @@ static BuiltinImplResult translateBuiltinVectorDot(IrBuilder& build, int nparams
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
         IrOp b = build.inst(IrCmd::LOAD_TVALUE, args, build.constInt(0));
 
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, b, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, b);
+        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::LEGACY_DOT_VEC, a, b, build.constInt(3)) : build.inst(IrCmd::LEGACY_DOT_VEC, a, b);
 
         sum = build.inst(IrCmd::FLOAT_TO_NUM, sum);
 
@@ -1339,7 +1339,7 @@ static BuiltinImplResult translateBuiltinVectorMap1x4(
         IrOp value = build.inst(IrCmd::LOAD_TVALUE, arg1);
         IrOp ret = build.inst(cmd, value);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LEGACY_TAG_VECTOR, ret));
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1387,7 +1387,7 @@ static BuiltinImplResult translateBuiltinVectorMap1(
         IrOp yr = build.inst(cmd, y1);
         IrOp zr = build.inst(cmd, z1);
 
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+        build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1496,7 +1496,7 @@ static BuiltinImplResult translateBuiltinVectorClamp(
         IrOp ztemp = build.inst(IrCmd::MAX_FLOAT, zmin, z);
         IrOp zclamped = build.inst(IrCmd::MIN_FLOAT, zmax, ztemp);
 
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xclamped, yclamped, zclamped);
+        build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(ra), xclamped, yclamped, zclamped);
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1552,7 +1552,7 @@ static BuiltinImplResult translateBuiltinVectorMinMax(
         // Swapped arguments are required for consistency with VM builtins
         IrOp ret = build.inst(cmd, value2, value1);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LEGACY_TAG_VECTOR, ret));
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1709,20 +1709,20 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinVectorDot(build, nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_FLOOR:
         return translateBuiltinVectorMap1x4(
-            build, condvectordouble(IrCmd::FLOOR_NUM, IrCmd::FLOOR_VEC), nparams, ra, arg, args, arg3, nresults, pcpos
+            build, condvectordouble(IrCmd::FLOOR_NUM, IrCmd::LEGACY_FLOOR_VEC), nparams, ra, arg, args, arg3, nresults, pcpos
         );
     case LBF_VECTOR_CEIL:
-        return translateBuiltinVectorMap1x4(build, condvectordouble(IrCmd::CEIL_NUM, IrCmd::CEIL_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
+        return translateBuiltinVectorMap1x4(build, condvectordouble(IrCmd::CEIL_NUM, IrCmd::LEGACY_CEIL_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_ABS:
-        return translateBuiltinVectorMap1x4(build, condvectordouble(IrCmd::ABS_NUM, IrCmd::ABS_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
+        return translateBuiltinVectorMap1x4(build, condvectordouble(IrCmd::ABS_NUM, IrCmd::LEGACY_ABS_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_SIGN:
         return translateBuiltinVectorMap1(build, condvectordouble(IrCmd::SIGN_NUM, IrCmd::SIGN_FLOAT), nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_CLAMP:
         return translateBuiltinVectorClamp(build, nparams, ra, arg, args, arg3, nresults, fallback, pcpos);
     case LBF_VECTOR_MIN:
-        return translateBuiltinVectorMinMax(build, condvectordouble(IrCmd::MIN_NUM, IrCmd::MIN_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
+        return translateBuiltinVectorMinMax(build, condvectordouble(IrCmd::MIN_NUM, IrCmd::LEGACY_MIN_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_MAX:
-        return translateBuiltinVectorMinMax(build, condvectordouble(IrCmd::MAX_NUM, IrCmd::MAX_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
+        return translateBuiltinVectorMinMax(build, condvectordouble(IrCmd::MAX_NUM, IrCmd::LEGACY_MAX_VEC), nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_LERP:
         return translateBuiltinVectorLerp(build, nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_MATH_LERP:

@@ -41,7 +41,7 @@ static bool isUnsafeToSink(IrCmd cmd)
     case IrCmd::BUFFER_READI64:
     case IrCmd::BUFFER_READF32:
     case IrCmd::BUFFER_READF64:
-    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
     case IrCmd::BUFFER_READF32X4:
 
     // Upvalue read: SET_UPVALUE to the same upvalue slot
@@ -138,7 +138,7 @@ struct RemoveDeadStoreState
             if (kind == IrValueKind::Unknown)
                 return;
             break;
-        case IrCmd::STORE_VECTOR:
+        case IrCmd::LEGACY_STORE_VECTOR:
             return; // multi-component, not useful as a single-value restore hint
         default:
             return;
@@ -420,7 +420,7 @@ struct RemoveDeadStoreState
                         IrInst& store = function.instructions[regInfo.tvalueInstIdx];
                         CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
                         CODEGEN_ASSERT(
-                            store.cmd == IrCmd::STORE_SPLIT_TVALUE || store.cmd == IrCmd::STORE_TVALUE || store.cmd == IrCmd::STORE_VECTOR ||
+                            store.cmd == IrCmd::STORE_SPLIT_TVALUE || store.cmd == IrCmd::STORE_TVALUE || store.cmd == IrCmd::LEGACY_STORE_VECTOR ||
                             (store.cmd == IrCmd::STORE_TAG && function.tagOp(OP_B(store)) == LUA_TNIL)
                         );
 
@@ -690,13 +690,13 @@ static bool tryReplaceTagWithFullStore(
         {
             IrInst& prevValueInst = function.instructions[regInfo.valueInstIdx];
 
-            if (prevValueInst.cmd == IrCmd::STORE_VECTOR)
+            if (prevValueInst.cmd == IrCmd::LEGACY_STORE_VECTOR)
             {
                 CODEGEN_ASSERT(!HAS_OP_E(prevValueInst));
                 IrOp prevValueX = OP_B(prevValueInst);
                 IrOp prevValueY = OP_C(prevValueInst);
                 IrOp prevValueZ = OP_D(prevValueInst);
-                replace(function, block, instIndex, IrInst{IrCmd::STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
+                replace(function, block, instIndex, IrInst{IrCmd::LEGACY_STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
             }
             else
             {
@@ -741,7 +741,7 @@ static bool tryReplaceTagWithFullStore(
             state.hasGcoToClear |= regInfo.maybeGco;
             return true;
         }
-        else if (prev.cmd == IrCmd::STORE_VECTOR)
+        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
         {
             // If the 'nil' is stored, we keep 'STORE_TAG Rn, tnil' as it writes the 'full' TValue
             if (tag != LUA_TNIL)
@@ -749,7 +749,7 @@ static bool tryReplaceTagWithFullStore(
                 IrOp prevValueX = OP_B(prev);
                 IrOp prevValueY = OP_C(prev);
                 IrOp prevValueZ = OP_D(prev);
-                replace(function, block, instIndex, IrInst{IrCmd::STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
+                replace(function, block, instIndex, IrInst{IrCmd::LEGACY_STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
             }
 
             CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
@@ -813,7 +813,7 @@ static bool tryReplaceValueWithFullStore(
             regInfo.tvalueInstIdx = instIndex;
             return true;
         }
-        else if (prev.cmd == IrCmd::STORE_VECTOR)
+        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
         {
             IrOp prevTagOp = OP_E(prev);
             CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
@@ -862,7 +862,7 @@ static bool tryReplaceVectorValueWithFullStore(
         CODEGEN_ASSERT(regInfo.knownTag == prevTag);
 
         IrInst& storeInst = function.instructions[instIndex];
-        CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
+        CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
 
         if (!HAS_OP_E(storeInst))
             storeInst.ops.push_back({});
@@ -889,7 +889,7 @@ static bool tryReplaceVectorValueWithFullStore(
             CODEGEN_ASSERT(!HAS_OP_D(prev));
 
             IrInst& storeInst = function.instructions[instIndex];
-            CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
+            CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
 
             if (!HAS_OP_E(storeInst))
                 storeInst.ops.push_back({});
@@ -902,7 +902,7 @@ static bool tryReplaceVectorValueWithFullStore(
             regInfo.tvalueInstIdx = instIndex;
             return true;
         }
-        else if (prev.cmd == IrCmd::STORE_VECTOR)
+        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
         {
             IrOp prevTagOp = OP_E(prev);
             CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
@@ -911,7 +911,7 @@ static bool tryReplaceVectorValueWithFullStore(
             CODEGEN_ASSERT(regInfo.knownTag == prevTag);
 
             IrInst& storeInst = function.instructions[instIndex];
-            CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
+            CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
 
             if (!HAS_OP_E(storeInst))
                 storeInst.ops.push_back({});
@@ -1073,7 +1073,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.maybeGco = false;
         }
         break;
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1455,7 +1455,7 @@ static void markDeadStoresInBlockChain(
                 case IrCmd::BUFFER_WRITEI64:
                 case IrCmd::BUFFER_WRITEF32:
                 case IrCmd::BUFFER_WRITEF64:
-                case IrCmd::BUFFER_WRITEVECTOR:
+                case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
                 case IrCmd::BUFFER_WRITEF32X4:
                     state.remainingUses[OP_A(inst).index]--;
 
@@ -1487,7 +1487,7 @@ static void markDeadStoresInBlockChain(
                     case IrCmd::BUFFER_WRITEI64:
                     case IrCmd::BUFFER_WRITEF32:
                     case IrCmd::BUFFER_WRITEF64:
-                    case IrCmd::BUFFER_WRITEVECTOR:
+                    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
                     case IrCmd::BUFFER_WRITEF32X4:
                         if (state.remainingUses[OP_A(inst).index] == 0)
                         {

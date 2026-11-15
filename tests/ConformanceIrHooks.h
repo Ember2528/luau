@@ -68,7 +68,7 @@ inline void storeVecResult3(Luau::CodeGen::IrBuilder& build, int reg, Luau::Code
     }
     else
     {
-        build.inst(IrCmd::STORE_VECTOR, build.vmReg(reg), x, y, z);
+        build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(reg), x, y, z);
         build.inst(IrCmd::STORE_TAG, build.vmReg(reg), build.constTag(LUA_TVECTOR));
     }
 }

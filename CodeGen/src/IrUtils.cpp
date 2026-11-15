@@ -155,6 +155,48 @@ IrValueKind getCmdValueKind(IrCmd cmd)
 {
     switch (cmd)
     {
+    case IrCmd::LEGACY_STORE_VECTOR:
+        return IrValueKind::None;
+    case IrCmd::LEGACY_SELECT_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_ADD_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_SUB_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_MUL_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_DIV_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_IDIV_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_MULADD_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_UNM_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_MIN_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_MAX_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_FLOOR_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_CEIL_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_ABS_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_DOT_VEC:
+        return IrValueKind::Float;
+    case IrCmd::LEGACY_EXTRACT_VEC:
+        return IrValueKind::Float;
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_TAG_VECTOR:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_UNTAG_VECTOR:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
+        return IrValueKind::Tvalue;
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+        return IrValueKind::None;
     case IrCmd::NOP:
         return IrValueKind::None;
     case IrCmd::LOAD_TAG:
@@ -169,6 +211,9 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Float;
     case IrCmd::LOAD_TVALUE:
         return IrValueKind::Tvalue;
+    case IrCmd::TVALUE_TO_VEC:
+    case IrCmd::LOAD_VEC:
+        return IrValueKind::Vector;
     case IrCmd::LOAD_ENV:
     case IrCmd::GET_ARR_ADDR:
     case IrCmd::GET_SLOT_NODE_ADDR:
@@ -180,7 +225,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::STORE_POINTER:
     case IrCmd::STORE_DOUBLE:
     case IrCmd::STORE_INT:
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::STORE_VEC_COMPONENTS:
+    case IrCmd::STORE_VEC:
     case IrCmd::STORE_TVALUE:
     case IrCmd::STORE_SPLIT_TVALUE:
     case IrCmd::CHECK_DIV_INT64:
@@ -256,8 +302,9 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CEIL_VEC:
     case IrCmd::ABS_VEC:
     case IrCmd::SELECT_VEC:
-    case IrCmd::SELECT_IF_TRUTHY:
     case IrCmd::MULADD_VEC:
+        return IrValueKind::Vector;
+    case IrCmd::SELECT_IF_TRUTHY:
         return IrValueKind::Tvalue;
     case IrCmd::DOT_VEC:
     case IrCmd::EXTRACT_VEC:
@@ -311,10 +358,13 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::Double;
     case IrCmd::NUM_TO_FLOAT:
         return IrValueKind::Float;
+    case IrCmd::BUILD_VEC:
     case IrCmd::FLOAT_TO_VEC:
+        return IrValueKind::Vector;
     case IrCmd::TAG_VECTOR:
-    case IrCmd::UNTAG_VECTOR:
         return IrValueKind::Tvalue;
+    case IrCmd::UNTAG_VECTOR:
+        return IrValueKind::Vector;
     case IrCmd::TRUNCATE_UINT:
         return IrValueKind::Int;
     case IrCmd::ADJUST_STACK_TO_REG:
@@ -337,6 +387,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::None;
     case IrCmd::GET_UPVALUE:
         return IrValueKind::Tvalue;
+    case IrCmd::GET_UPVALUE_ADDR:
+        return IrValueKind::Pointer;
     case IrCmd::SET_UPVALUE:
     case IrCmd::CHECK_TAG:
     case IrCmd::CHECK_TRUTHY:
@@ -428,10 +480,11 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::BUFFER_READF64:
         return IrValueKind::Double;
     case IrCmd::BUFFER_READVECTOR:
-        return IrValueKind::Tvalue;
+        return IrValueKind::Vector;
     case IrCmd::BUFFER_WRITEVECTOR:
         return IrValueKind::None;
     case IrCmd::BUFFER_READF32X4:
+        // Four arbitrary memory floats are raw SIMD bits, not a packed vector TValue.
         return IrValueKind::Tvalue;
     case IrCmd::JUMP_CMP_PROTOID:
         return IrValueKind::None;
@@ -1102,6 +1155,7 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
             substitute(function, inst, OP_A(inst));
         }
         break;
+    case IrCmd::LEGACY_SELECT_VEC:
     case IrCmd::SELECT_VEC:
         if (OP_A(inst) == OP_B(inst))
         {
@@ -1951,7 +2005,7 @@ std::optional<uint8_t> tryGetOperandTag(IrFunction& function, IrOp op)
 {
     if (IrInst* arg = function.asInstOp(op))
     {
-        if (arg->cmd == IrCmd::TAG_VECTOR)
+        if (arg->cmd == IrCmd::TAG_VECTOR || arg->cmd == IrCmd::LEGACY_TAG_VECTOR)
             return LUA_TVECTOR;
 
         if (arg->cmd == IrCmd::LOAD_TVALUE && HAS_OP_C(*arg))

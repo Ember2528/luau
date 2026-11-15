@@ -27,8 +27,6 @@ static const int8_t kInvalidSpill = 64;
 
 static int allocSpill(uint64_t& free, KindA64 kind)
 {
-    CODEGEN_ASSERT(kStackSize <= 256); // to support larger stack frames, we need to ensure qN is allocated at 16b boundary to fit in ldr/str encoding
-
     uint64_t search = free;
 
     // qN registers use two consecutive slots
@@ -36,6 +34,14 @@ static int allocSpill(uint64_t& free, KindA64 kind)
     {
         // Make sure bit N is set only if bit N+1 is also set
         search = free & (free >> 1);
+
+        // Past the unscaled immediate range, SIMD spills need a 16-byte aligned offset.
+        if constexpr (kStackSize > 256)
+        {
+            static_assert(sSpillArea.data % 16 == 0);
+            constexpr uint64_t largeOffsets = ~0ull << ((256 - sSpillArea.data) / 8);
+            search &= ~(largeOffsets & 0xaaaaaaaaaaaaaaaaull);
+        }
 
         // Prevent qN from allocating at stack/extra spill storage boundary (by reserving last stack slot)
         search &= ~(1ull << (kSpillSlots - 1));
@@ -82,6 +88,7 @@ static int getReloadOffset(IrValueKind kind)
     case IrValueKind::Double:
         return offsetof(TValue, value.n);
     case IrValueKind::Tvalue:
+    case IrValueKind::Vector:
         return 0;
     }
 
@@ -89,18 +96,32 @@ static int getReloadOffset(IrValueKind kind)
     LUAU_UNREACHABLE();
 }
 
+static unsigned getReloadAccessSize(IrValueKind kind)
+{
+    return kind == IrValueKind::Tvalue || kind == IrValueKind::Vector ? 16 : kind == IrValueKind::Tag || kind == IrValueKind::Int ? 4 : 8;
+}
+
 static AddressA64 getReloadAddress(ValueRestoreLocation location)
 {
     IrOp op = location.op;
-
+    RegisterA64 base;
     if (op.kind == IrOpKind::VmReg)
-        return mem(rBase, vmRegOp(op) * sizeof(TValue) + getReloadOffset(location.kind));
+        base = rBase;
+    else if (op.kind == IrOpKind::VmConst && isMemoryOffsetEncodable(int64_t(vmConstOp(op)) * sizeof(TValue), 4))
+        base = rConstants; // Keep the existing conservative constant restore window.
+    else
+        return AddressA64(xzr);
 
-    // loads are 4/8/16 bytes; we conservatively limit the offset to fit assuming a 4b index
-    if (op.kind == IrOpKind::VmConst && vmConstOp(op) * sizeof(TValue) <= AddressA64::kMaxOffset * 4)
-        return mem(rConstants, vmConstOp(op) * sizeof(TValue) + getReloadOffset(location.kind));
+    int offset = op.index * sizeof(TValue) + getReloadOffset(location.kind);
+    unsigned accessSize = getReloadAccessSize(location.kind);
+    // SIMD payloads can synthesize an address; scalar restores require a direct encoding.
+    if (!isMemoryOffsetEncodable(offset, accessSize) && accessSize != 16)
+        return AddressA64(xzr);
+    if (location.lazy && (sizeof(TValue) > 16 || location.kind != IrValueKind::Tvalue) &&
+        !isMemoryOffsetEncodable(int64_t(op.index) * sizeof(TValue) + offsetof(TValue, tt), 4))
+        return AddressA64(xzr);
 
-    return AddressA64(xzr); // dummy
+    return mem(base, offset);
 }
 
 
@@ -580,6 +601,8 @@ void IrRegAllocA64::restore(const IrRegAllocA64::Spill& s, RegisterA64 reg)
 
     if (s.slot >= 0)
     {
+        // Raw SIMD spills preserve every lane, including a semantic vector's
+        // unspecified inactive lane.
         build.ldr(reg, mem(sp, sSpillArea.data + s.slot * 8));
 
         if (s.slot != kInvalidSpill)
@@ -637,6 +660,12 @@ void IrRegAllocA64::restore(const IrRegAllocA64::Spill& s, RegisterA64 reg)
             // Temporary might have taken a spot needed for other registers in spill restore process
             freeTemp(temp);
         }
+        else if (!isMemoryOffsetEncodable(addr.data, getReloadAccessSize(restoreLocation.kind)))
+        {
+            RegisterA64 temp = allocTemp(KindA64::x);
+            build.ldr(reg, emitMemoryAddress(build, addr.base, size_t(addr.data), temp));
+            freeTemp(temp);
+        }
         else
         {
             build.ldr(reg, addr);
@@ -675,7 +704,7 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool
     {
         // instead of spilling the register to never reload it, we assume the register is not needed anymore
     }
-    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true))
+    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true) && getReloadAddress(function.findRestoreLocation(def, true)).base != xzr)
     {
         ValueRestoreLocation loc = function.findRestoreLocation(def, true);
 
@@ -688,10 +717,21 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool
             int storeReg = vmRegOp(loc.op);
             AddressA64 addr = mem(rBase, storeReg * sizeof(TValue) + getReloadOffset(loc.kind));
 
+            RegisterA64 temp = noreg;
+            if (!isMemoryOffsetEncodable(addr.data, getReloadAccessSize(loc.kind)))
+            {
+                temp = allocTemp(KindA64::x);
+                addr = emitMemoryAddress(build, addr.base, size_t(addr.data), temp);
+            }
+
             build.str(def.regA64, addr);
 
-            // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag
-            if (loc.kind != IrValueKind::Tvalue)
+            if (temp != noreg)
+                freeTemp(temp);
+
+            // Wide TValue payloads and semantic vectors carry no tag; protect
+            // lazy VM locations with nil until synchronization supplies the tag.
+            if (sizeof(TValue) > 16 || loc.kind != IrValueKind::Tvalue)
                 build.str(wzr, mem(rBase, storeReg * sizeof(TValue) + offsetof(TValue, tt)));
 
             if (!keepLazyLocations)

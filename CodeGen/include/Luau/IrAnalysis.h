@@ -21,8 +21,6 @@ struct IrFunction;
 
 void updateUseCounts(IrFunction& function);
 
-void updateLastUseLocations(IrFunction& function, const std::vector<uint32_t>& sortedBlocks);
-
 // Update lastUse for all Inst operands consumed by instructions in a single block
 void updateLastUseLocationsInBlock(IrFunction& function, uint32_t blockIdx);
 

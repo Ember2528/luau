@@ -23,6 +23,7 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
     case IrCmd::LOAD_INT:
     case IrCmd::LOAD_FLOAT:
     case IrCmd::LOAD_TVALUE:
+    case IrCmd::LOAD_VEC:
         visitor.maybeUse(OP_A(inst)); // Argument can also be a VmConst
         break;
     case IrCmd::STORE_TAG:
@@ -30,7 +31,9 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
     case IrCmd::STORE_POINTER:
     case IrCmd::STORE_DOUBLE:
     case IrCmd::STORE_INT:
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
+    case IrCmd::STORE_VEC_COMPONENTS:
+    case IrCmd::STORE_VEC:
     case IrCmd::STORE_TVALUE:
     case IrCmd::STORE_SPLIT_TVALUE:
         visitor.maybeDef(OP_A(inst)); // Argument can also be a pointer value
@@ -83,8 +86,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.defRange(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
         break;
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
+        visitor.maybeUse(OPT_OP_D(inst)); // The wide-value GC barrier reloads the source from its VM register.
         break;
     case IrCmd::INTERRUPT:
         break;

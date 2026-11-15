@@ -60,7 +60,8 @@ struct IrRegAllocX64
 
     void freeReg(RegisterX64 reg);
     void freeLastUseReg(IrInst& target, uint32_t instIdx);
-    void freeLastUseRegs(const IrInst& inst, uint32_t instIdx);
+    // Record the emitted result before freeing its inputs; reuse retains input facts until this point.
+    void finishInst(IrInst& inst, uint32_t instIdx);
 
     bool isLastUseReg(const IrInst& target, uint32_t instIdx) const;
 
@@ -78,6 +79,13 @@ struct IrRegAllocX64
     void preserve(IrInst& inst);
 
     void restore(IrInst& inst, bool intoOriginalLocation);
+
+    // Raw access preserves inactive lane bits; numeric access normalizes them after any restore.
+    RegisterX64 getRawVectorReg(IrInst& inst);
+    RegisterX64 getNumericVectorReg(IrInst& inst);
+
+    // Forget path-specific normalization facts after restoring the block's register state.
+    void beginBlock();
 
     void preserveAndFreeInstValues();
 
@@ -118,6 +126,13 @@ struct IrRegAllocX64
     uint32_t allocActionCount = 0;
 
     bool error = false;
+
+private:
+    // Facts describe current physical register contents, never an SSA value's semantic type.
+    std::bitset<16> vectorNeedsMask;
+    OperandX64 vectorPayloadMask = noreg;
+
+    void clearVectorTagLane(RegisterX64 reg);
 };
 
 struct ScopedRegX64

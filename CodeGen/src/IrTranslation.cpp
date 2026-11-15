@@ -726,25 +726,25 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
             switch (tm)
             {
             case TM_ADD:
-                result = build.inst(IrCmd::ADD_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_ADD_VEC, vb, vc);
                 break;
             case TM_SUB:
-                result = build.inst(IrCmd::SUB_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_SUB_VEC, vb, vc);
                 break;
             case TM_MUL:
-                result = build.inst(IrCmd::MUL_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_MUL_VEC, vb, vc);
                 break;
             case TM_DIV:
-                result = build.inst(IrCmd::DIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_DIV_VEC, vb, vc);
                 break;
             case TM_IDIV:
-                result = build.inst(IrCmd::IDIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_IDIV_VEC, vb, vc);
                 break;
             default:
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
+            result = build.inst(IrCmd::LEGACY_TAG_VECTOR, result);
 
             build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
         }
@@ -807,26 +807,26 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
         }
         else
         {
-            IrOp vb = build.inst(IrCmd::FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, opb)));
+            IrOp vb = build.inst(IrCmd::LEGACY_FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, opb)));
             IrOp vc = build.inst(IrCmd::LOAD_TVALUE, opc);
             IrOp result;
 
             switch (tm)
             {
             case TM_MUL:
-                result = build.inst(IrCmd::MUL_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_MUL_VEC, vb, vc);
                 break;
             case TM_DIV:
-                result = build.inst(IrCmd::DIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_DIV_VEC, vb, vc);
                 break;
             case TM_IDIV:
-                result = build.inst(IrCmd::IDIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_IDIV_VEC, vb, vc);
                 break;
             default:
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
+            result = build.inst(IrCmd::LEGACY_TAG_VECTOR, result);
 
             build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
         }
@@ -888,25 +888,25 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
         else
         {
             IrOp vb = build.inst(IrCmd::LOAD_TVALUE, opb);
-            IrOp vc = build.inst(IrCmd::FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, opc)));
+            IrOp vc = build.inst(IrCmd::LEGACY_FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, opc)));
             IrOp result;
 
             switch (tm)
             {
             case TM_MUL:
-                result = build.inst(IrCmd::MUL_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_MUL_VEC, vb, vc);
                 break;
             case TM_DIV:
-                result = build.inst(IrCmd::DIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_DIV_VEC, vb, vc);
                 break;
             case TM_IDIV:
-                result = build.inst(IrCmd::IDIV_VEC, vb, vc);
+                result = build.inst(IrCmd::LEGACY_IDIV_VEC, vb, vc);
                 break;
             default:
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
+            result = build.inst(IrCmd::LEGACY_TAG_VECTOR, result);
 
             build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
         }
@@ -1155,8 +1155,8 @@ void translateInstMinus(IrBuilder& build, const Instruction* pc, int pcpos)
         else
         {
             IrOp vb = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb));
-            IrOp va = build.inst(IrCmd::UNM_VEC, vb);
-            va = build.inst(IrCmd::TAG_VECTOR, va);
+            IrOp va = build.inst(IrCmd::LEGACY_UNM_VEC, vb);
+            va = build.inst(IrCmd::LEGACY_TAG_VECTOR, va);
             build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), va);
         }
 

@@ -51,8 +51,32 @@ enum class IrCmd : uint8_t
 {
     NOP,
 
+    // Transitional packed-vector commands; removed with producer migration.
+    LEGACY_STORE_VECTOR,
+    LEGACY_SELECT_VEC,
+    LEGACY_ADD_VEC,
+    LEGACY_SUB_VEC,
+    LEGACY_MUL_VEC,
+    LEGACY_DIV_VEC,
+    LEGACY_IDIV_VEC,
+    LEGACY_MULADD_VEC,
+    LEGACY_UNM_VEC,
+    LEGACY_MIN_VEC,
+    LEGACY_MAX_VEC,
+    LEGACY_FLOOR_VEC,
+    LEGACY_CEIL_VEC,
+    LEGACY_ABS_VEC,
+    LEGACY_DOT_VEC,
+    LEGACY_EXTRACT_VEC,
+    LEGACY_FLOAT_TO_VEC,
+    LEGACY_TAG_VECTOR,
+    LEGACY_UNTAG_VECTOR,
+    LEGACY_BUFFER_READVECTOR,
+    LEGACY_BUFFER_WRITEVECTOR,
+
     // Load a tag from TValue
-    // A: Rn or Kn
+    // A: Rn or Kn or pointer (TValue)
+    // B: int/none (optional 'A' pointer offset)
     LOAD_TAG,
 
     // Load a pointer (*) from TValue
@@ -72,11 +96,16 @@ enum class IrCmd : uint8_t
     // B: int (offset from the start of TValue)
     LOAD_FLOAT,
 
-    // Load a TValue from memory
+    // Load the 128-bit TValue payload from memory; the tag is separate in wider layouts
     // A: Rn or Kn or pointer (TValue)
     // B: int/none (optional 'A' pointer offset)
-    // C: tag/none (tag of the value being loaded)
+    // C: tag/none (known tag metadata, not part of the load)
     LOAD_TVALUE,
+
+    // Load vector payload from a checked vector TValue. The inactive fourth lane is unspecified.
+    // A: Rn or Kn or pointer (TValue)
+    // B: int/none (optional pointer offset)
+    LOAD_VEC,
 
     // Load current environment table
     LOAD_ENV,
@@ -128,19 +157,24 @@ enum class IrCmd : uint8_t
     // B: int
     STORE_INT,
 
-    // Store a vector into TValue
-    // When optional 'E' tag is present, it is written out to the TValue as well
+    // Lowering-only combine of BUILD_VEC followed by its sole STORE_VEC use.
+    // A: Rn; B/C/D: float X/Y/Z; E: float W in four-component builds.
+    // Writes a complete vector TValue, including its tag.
+    STORE_VEC_COMPONENTS,
+
+    // Store a SIMD vector result as a complete vector TValue (including its tag).
+    // All active component lanes of B are meaningful; an inactive fourth lane is unspecified.
+    // Packing belongs to lowering and must not change a still-live B.
+    // This is a non-allocating store for inline float vectors, not heap double vectors.
     // A: Rn
-    // B: float (x)
-    // C: float (y)
-    // D: float (z)
-    // E: tag (optional)
-    STORE_VECTOR,
+    // B: SIMD vector
+    STORE_VEC,
 
     // Store a TValue into memory
     // A: Rn or pointer (TValue)
     // B: TValue
     // C: int (optional 'A' pointer offset)
+    // D: tag (optional; required when the tag isn't embedded in B)
     STORE_TVALUE,
 
     // Store a pair of tag and value into memory
@@ -296,8 +330,8 @@ enum class IrCmd : uint8_t
     SELECT_INT64,
 
     // For each lane in the vector, select B if C == D, otherwise select A
-    // A, B: TValue (endpoints)
-    // C, D: TValue (condition arguments)
+    // A, B: vector (endpoints)
+    // C, D: vector (condition arguments)
     SELECT_VEC,
 
     // Select one of the TValues based on the truthyness of A
@@ -307,45 +341,45 @@ enum class IrCmd : uint8_t
     SELECT_IF_TRUTHY,
 
     // Add/Sub/Mul/Div/Idiv two vectors
-    // A, B: TValue (vector)
+    // A, B: vector
     ADD_VEC,
     SUB_VEC,
     MUL_VEC,
     DIV_VEC,
     IDIV_VEC,
     // Lanewise A * B + C
-    // A, B, C: TValue (vector)
+    // A, B, C: vector
     MULADD_VEC,
 
     // Negate a vector
-    // A: TValue (vector)
+    // A: vector
     UNM_VEC,
 
     // Get the minimum/maximum of two vector elements
     // If one of the element values is NaN, 'B' is returned as the result
-    // A, B: TValue (vector)
+    // A, B: vector
     MIN_VEC,
     MAX_VEC,
 
     // Round vector elements to negative infinity
-    // A: TValue (vector)
+    // A: vector
     FLOOR_VEC,
 
     // Round vector elements to positive infinity
-    // A: TValue (vector)
+    // A: vector
     CEIL_VEC,
 
     // Get absolute value of vector elements
-    // A: TValue (vector)
+    // A: vector
     ABS_VEC,
 
     // Compute dot product between two vectors as a float number (use FLOAT_TO_NUM to convert to double)
-    // A, B: TValue
-    // C: int (component count, 3 or 4)
+    // A, B: vector
+    // C: int (component count, 3 or 4, when multi-lane dot is enabled)
     DOT_VEC,
 
-    // Extract a component of a vector (use FLOAT_TO_NUM to convert to double)
-    // A: TValue (vector)
+    // Extract a float component (use FLOAT_TO_NUM to convert to double)
+    // A: vector or TValue payload
     // B: int (0-3 index)
     EXTRACT_VEC,
 
@@ -494,6 +528,7 @@ enum class IrCmd : uint8_t
     // A: double (x)
     // B: double (y)
     // C: double (z)
+    // D: double (w in four-component builds, optional; defaults to zero)
     NEW_VECTOR,
 
     // Convert integer into a double number
@@ -532,17 +567,25 @@ enum class IrCmd : uint8_t
     // A: double
     NUM_TO_FLOAT,
 
-    // Converts a float number to a vector with the value in X/Y/Z (use NUM_TO_FLOAT to convert from double)
+    // Construct a semantic inline vector from rounded float components.
+    // A/B/C: float X/Y/Z; D: float W in four-component builds.
+    BUILD_VEC,
+
+    // Converts a float number to a vector with the value in every active lane (use NUM_TO_FLOAT to convert from double)
     // A: float
     FLOAT_TO_VEC,
 
-    // Adds VECTOR type tag to a vector, preserving X/Y/Z components
-    // A: TValue
+    // Adapt a semantic vector to a TValue payload; embeds the tag in T16.
+    // A: vector
     TAG_VECTOR,
 
     // Clear the fourth lane to be zero, preserving X/Y/Z components
     // A: TValue (vector)
     UNTAG_VECTOR,
+
+    // Convert a checked, packed vector TValue to a semantic vector payload.
+    // A: tvalue
+    TVALUE_TO_VEC,
 
     // Clear high register bits of an unsigned integer register. Used to sanitize value of 'producesDirtyHighRegisterBits' instructions.
     // A: uint
@@ -652,10 +695,16 @@ enum class IrCmd : uint8_t
     // A: UPn
     GET_UPVALUE,
 
+    // Resolve a function upvalue to its TValue address (inline or through UpVal.v)
+    // Consume before an operation that can close upvalues or move the stack.
+    // A: UPn
+    GET_UPVALUE_ADDR,
+
     // Store TValue into a function upvalue
     // A: UPn
     // B: TValue
     // C: tag/undef (tag of the value that was written)
+    // D: Rn/undef (source location for a dynamic GC barrier)
     SET_UPVALUE,
 
     // Guards and checks (these instructions are not block terminators even though they jump to fallback)
@@ -1105,7 +1154,7 @@ enum class IrCmd : uint8_t
     // B: int (offset)
     // C: tag (LUA_TBUFFER or LUA_TUSERDATA)
     // D: int (component count)
-    // Produces a vector value in a single SIMD register; combine with TAG_VECTOR before storing
+    // Produces a semantic vector in a single SIMD register; use STORE_VEC for a TValue result.
     BUFFER_READVECTOR,
 
     // Write 'count' (2 or 3) contiguous f32 values from a vector value to buffer storage
@@ -1258,6 +1307,7 @@ enum class IrValueKind : uint8_t
     Float,
     Double,
     Tvalue,
+    Vector, // SIMD vector payload, independent of the TValue tag
 
     Count
 };

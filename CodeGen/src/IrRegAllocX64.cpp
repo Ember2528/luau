@@ -19,7 +19,7 @@ namespace CodeGen
 namespace X64
 {
 
-static constexpr unsigned kValueDwordSize[] = {0, 0, 1, 1, 2, 2, 1, 2, 4};
+static constexpr unsigned kValueDwordSize[] = {0, 0, 1, 1, 2, 2, 1, 2, 4, 4};
 static_assert(sizeof(kValueDwordSize) / sizeof(kValueDwordSize[0]) == size_t(IrValueKind::Count), "all kinds have to be covered");
 
 static const RegisterX64 kGprAllocOrder[] = {rax, rdx, rcx, rbx, rsi, rdi, r8, r9, r10, r11};
@@ -175,6 +175,8 @@ void IrRegAllocX64::freeReg(RegisterX64 reg)
         CODEGEN_ASSERT(!freeXmmMap[reg.index]);
         freeXmmMap[reg.index] = true;
         xmmInstUsers[reg.index] = kInvalidInstIdx;
+        if constexpr (sizeof(TValue) == 16)
+            vectorNeedsMask.reset(reg.index);
     }
     else
     {
@@ -199,8 +201,31 @@ void IrRegAllocX64::freeLastUseReg(IrInst& target, uint32_t instIdx)
     }
 }
 
-void IrRegAllocX64::freeLastUseRegs(const IrInst& inst, uint32_t instIdx)
+void IrRegAllocX64::finishInst(IrInst& inst, uint32_t instIdx)
 {
+    if constexpr (sizeof(TValue) == 16)
+    {
+        if (getCmdValueKind(inst.cmd) == IrValueKind::Vector)
+        {
+            CODEGEN_ASSERT(inst.regX64 != noreg);
+            bool needsMask = false;
+            switch (inst.cmd)
+            {
+            case IrCmd::LOAD_VEC:
+            case IrCmd::TVALUE_TO_VEC:
+                needsMask = true;
+                break;
+            case IrCmd::UNM_VEC:
+                // Negation preserves the inactive lane. Read its fact after the input's possible restore.
+                needsMask = vectorNeedsMask.test(function.instOp(OP_A(inst)).regX64.index);
+                break;
+            default:
+                break;
+            }
+            vectorNeedsMask.set(inst.regX64.index, needsMask);
+        }
+    }
+
     auto checkOp = [this, instIdx](IrOp op)
     {
         if (op.kind == IrOpKind::Inst)
@@ -400,7 +425,7 @@ void IrRegAllocX64::preserve(IrInst& inst)
     {
         unsigned i = findSpillStackSlot(spill.valueKind);
 
-        if (spill.valueKind == IrValueKind::Tvalue)
+        if (spill.valueKind == IrValueKind::Tvalue || spill.valueKind == IrValueKind::Vector)
             build.vmovups(xmmword[sSpillArea + i * 4], inst.regX64);
         else if (spill.valueKind == IrValueKind::Double)
             build.vmovsd(qword[sSpillArea + i * 4], inst.regX64);
@@ -450,7 +475,7 @@ void IrRegAllocX64::preserve(IrInst& inst)
 
             int storeReg = vmRegOp(loc.op);
 
-            if (spill.valueKind == IrValueKind::Tvalue)
+            if (spill.valueKind == IrValueKind::Tvalue || spill.valueKind == IrValueKind::Vector)
                 build.vmovups(luauReg(storeReg), inst.regX64);
             else if (spill.valueKind == IrValueKind::Double)
                 build.vmovsd(luauRegValue(storeReg), inst.regX64);
@@ -461,8 +486,8 @@ void IrRegAllocX64::preserve(IrInst& inst)
             else
                 CODEGEN_ASSERT(!"Unsupported value kind for lazy store");
 
-            // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag
-            if (spill.valueKind != IrValueKind::Tvalue)
+            // Wider Tvalue payloads, partial values and semantic vectors carry no tag; protect lazy VM locations with nil.
+            if (sizeof(TValue) > 16 || spill.valueKind != IrValueKind::Tvalue)
                 build.mov(luauRegTag(storeReg), 0);
 
             if (!keepLazyLocations)
@@ -544,6 +569,15 @@ void IrRegAllocX64::restore(IrInst& inst, bool intoOriginalLocation)
             {
                 build.vmovups(reg, restoreAddr);
             }
+            else if (spill.valueKind == IrValueKind::Vector)
+            {
+                // Stack slots preserve all SIMD bits. VM memory contains a packed (or nil-protected) tag.
+                build.vmovups(reg, restoreAddr);
+                // A VM restore supplies a packed lane; raw spills may predate an
+                // in-place normalization. Conservatively reestablish the boundary.
+                if constexpr (sizeof(TValue) == 16)
+                    vectorNeedsMask.set(reg.index);
+            }
             else if (spill.valueKind == IrValueKind::Double)
             {
                 build.vmovsd(reg, restoreAddr);
@@ -558,8 +592,10 @@ void IrRegAllocX64::restore(IrInst& inst, bool intoOriginalLocation)
                 else
                     CODEGEN_ASSERT(!"re-materialization not supported for this conversion command");
             }
-            else if (spill.valueKind == IrValueKind::Tag || spill.valueKind == IrValueKind::Int || spill.valueKind == IrValueKind::Int64 ||
-                     spill.valueKind == IrValueKind::Pointer)
+            else if (
+                spill.valueKind == IrValueKind::Tag || spill.valueKind == IrValueKind::Int || spill.valueKind == IrValueKind::Int64 ||
+                spill.valueKind == IrValueKind::Pointer
+            )
             {
                 build.mov(reg, restoreAddr);
             }
@@ -633,6 +669,53 @@ bool IrRegAllocX64::shouldFreeGpr(RegisterX64 reg) const
     return false;
 }
 
+RegisterX64 IrRegAllocX64::getRawVectorReg(IrInst& inst)
+{
+    CODEGEN_ASSERT(getCmdValueKind(inst.cmd) == IrValueKind::Vector);
+    if (inst.spilled || inst.needsReload)
+        restore(inst, false);
+
+    CODEGEN_ASSERT(inst.regX64 != noreg);
+    return inst.regX64;
+}
+
+RegisterX64 IrRegAllocX64::getNumericVectorReg(IrInst& inst)
+{
+    RegisterX64 reg = getRawVectorReg(inst);
+    if constexpr (sizeof(TValue) == 16)
+    {
+        if (vectorNeedsMask.test(reg.index))
+        {
+            clearVectorTagLane(reg);
+            vectorNeedsMask.reset(reg.index);
+        }
+    }
+    return reg;
+}
+
+void IrRegAllocX64::beginBlock()
+{
+    // A normalization in one predecessor need not execute on another path.
+    // Raw spills are handled independently by restore(), including exit-sync snapshots.
+    if constexpr (sizeof(TValue) == 16)
+    {
+        for (uint8_t reg = 0; reg < xmmInstUsers.size(); ++reg)
+        {
+            uint32_t user = xmmInstUsers[reg];
+            if (user != kInvalidInstIdx && getCmdValueKind(function.instructions[user].cmd) == IrValueKind::Vector)
+                vectorNeedsMask.set(reg);
+        }
+    }
+}
+
+void IrRegAllocX64::clearVectorTagLane(RegisterX64 reg)
+{
+    CODEGEN_ASSERT(sizeof(TValue) == 16 && LUA_VECTOR_DOUBLE == 0);
+    if (vectorPayloadMask.base == noreg)
+        vectorPayloadMask = build.u32x4(~0u, ~0u, ~0u, 0);
+    build.vandps(reg, reg, vectorPayloadMask);
+}
+
 unsigned IrRegAllocX64::findSpillStackSlot(IrValueKind valueKind)
 {
     if (valueKind == IrValueKind::Float || valueKind == IrValueKind::Int)
@@ -647,14 +730,14 @@ unsigned IrRegAllocX64::findSpillStackSlot(IrValueKind valueKind)
     }
     else
     {
-        // Find a free stack slot. Four consecutive slots might be required for 16 byte TValues, so '- 3' is used
+        // Find a free stack slot. TValues and semantic vectors require four consecutive slots, so '- 3' is used
         // For 8 and 16 byte types we search in steps of 2 to return slot indices aligned by 2
         for (unsigned i = 0; i < unsigned(usedSpillSlotHalfs.size() - 3); i += 2)
         {
             if (usedSpillSlotHalfs.test(i) || usedSpillSlotHalfs.test(i + 1))
                 continue;
 
-            if (valueKind == IrValueKind::Tvalue)
+            if (valueKind == IrValueKind::Tvalue || valueKind == IrValueKind::Vector)
             {
                 if (usedSpillSlotHalfs.test(i + 2) || usedSpillSlotHalfs.test(i + 3))
                 {
@@ -696,6 +779,7 @@ OperandX64 IrRegAllocX64::getRestoreAddress(const IrInst& inst, ValueRestoreLoca
     case IrValueKind::Double:
         return restoreLocation.op.kind == IrOpKind::VmReg ? luauRegValue(vmRegOp(op)) : luauConstantValue(vmConstOp(op));
     case IrValueKind::Tvalue:
+    case IrValueKind::Vector:
         return restoreLocation.op.kind == IrOpKind::VmReg ? luauReg(vmRegOp(op)) : luauConstant(vmConstOp(op));
     }
 

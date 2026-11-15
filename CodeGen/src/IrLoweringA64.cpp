@@ -329,6 +329,35 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     switch (inst.cmd)
     {
+    case IrCmd::SELECT_VEC:
+    case IrCmd::ADD_VEC:
+    case IrCmd::SUB_VEC:
+    case IrCmd::MUL_VEC:
+    case IrCmd::DIV_VEC:
+    case IrCmd::IDIV_VEC:
+    case IrCmd::MULADD_VEC:
+    case IrCmd::UNM_VEC:
+    case IrCmd::MIN_VEC:
+    case IrCmd::MAX_VEC:
+    case IrCmd::FLOOR_VEC:
+    case IrCmd::CEIL_VEC:
+    case IrCmd::ABS_VEC:
+    case IrCmd::DOT_VEC:
+    case IrCmd::EXTRACT_VEC:
+    case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::TAG_VECTOR:
+    case IrCmd::UNTAG_VECTOR:
+    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::BUFFER_WRITEVECTOR:
+    case IrCmd::LOAD_VEC:
+    case IrCmd::STORE_VEC:
+    case IrCmd::STORE_VEC_COMPONENTS:
+    case IrCmd::BUILD_VEC:
+    case IrCmd::TVALUE_TO_VEC:
+    case IrCmd::GET_UPVALUE_ADDR:
+        // Added IR forms stay dormant until this backend is installed.
+        error = true;
+        return;
     case IrCmd::LOAD_TAG:
     {
         inst.regA64 = regs.allocReg(KindA64::w, index);
@@ -534,7 +563,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
     {
         RegisterA64 temp1 = tempFloat(OP_B(inst));
         RegisterA64 temp2 = tempFloat(OP_C(inst));
@@ -1050,7 +1079,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.csel(inst.regA64, temp2, temp1, getConditionInt64(cond));
         break;
     }
-    case IrCmd::SELECT_VEC:
+    case IrCmd::LEGACY_SELECT_VEC:
     {
         // `OP_B(inst)` cannot be reused for return value, because it can be overwritten with A before the first usage
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_C(inst), OP_D(inst)});
@@ -1100,7 +1129,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.setLabel(exit);
         break;
     }
-    case IrCmd::MULADD_VEC:
+    case IrCmd::LEGACY_MULADD_VEC:
     {
         RegisterA64 tempA = regOp(OP_A(inst));
         RegisterA64 tempB = regOp(OP_B(inst));
@@ -1121,35 +1150,35 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::ADD_VEC:
+    case IrCmd::LEGACY_ADD_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
         build.fadd(inst.regA64, regOp(OP_A(inst)), regOp(OP_B(inst)));
         break;
     }
-    case IrCmd::SUB_VEC:
+    case IrCmd::LEGACY_SUB_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
         build.fsub(inst.regA64, regOp(OP_A(inst)), regOp(OP_B(inst)));
         break;
     }
-    case IrCmd::MUL_VEC:
+    case IrCmd::LEGACY_MUL_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
         build.fmul(inst.regA64, regOp(OP_A(inst)), regOp(OP_B(inst)));
         break;
     }
-    case IrCmd::DIV_VEC:
+    case IrCmd::LEGACY_DIV_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
         build.fdiv(inst.regA64, regOp(OP_A(inst)), regOp(OP_B(inst)));
         break;
     }
-    case IrCmd::IDIV_VEC:
+    case IrCmd::LEGACY_IDIV_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
@@ -1157,14 +1186,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.frintm(inst.regA64, inst.regA64);
         break;
     }
-    case IrCmd::UNM_VEC:
+    case IrCmd::LEGACY_UNM_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
         build.fneg(inst.regA64, regOp(OP_A(inst)));
         break;
     }
-    case IrCmd::MIN_VEC:
+    case IrCmd::LEGACY_MIN_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
@@ -1191,7 +1220,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::MAX_VEC:
+    case IrCmd::LEGACY_MAX_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst), OP_B(inst)});
 
@@ -1217,27 +1246,27 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::FLOOR_VEC:
+    case IrCmd::LEGACY_FLOOR_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
         build.frintm(inst.regA64, regOp(OP_A(inst)));
         break;
     }
-    case IrCmd::CEIL_VEC:
+    case IrCmd::LEGACY_CEIL_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
         build.frintp(inst.regA64, regOp(OP_A(inst)));
         break;
     }
-    case IrCmd::ABS_VEC:
+    case IrCmd::LEGACY_ABS_VEC:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
         build.fabs(inst.regA64, regOp(OP_A(inst)));
         break;
     }
-    case IrCmd::DOT_VEC:
+    case IrCmd::LEGACY_DOT_VEC:
     {
         inst.regA64 = regs.allocReg(KindA64::s, index);
 
@@ -1271,7 +1300,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::EXTRACT_VEC:
+    case IrCmd::LEGACY_EXTRACT_VEC:
     {
         inst.regA64 = regs.allocReg(KindA64::s, index);
 
@@ -2057,7 +2086,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.fcvt(inst.regA64, regOp(OP_A(inst)));
         break;
-    case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
     {
         inst.regA64 = regs.allocReg(KindA64::q, index);
 
@@ -2089,7 +2118,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
-    case IrCmd::TAG_VECTOR:
+    case IrCmd::LEGACY_TAG_VECTOR:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
@@ -2103,7 +2132,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.ins_4s(inst.regA64, tempw, 3);
         break;
     }
-    case IrCmd::UNTAG_VECTOR:
+    case IrCmd::LEGACY_UNTAG_VECTOR:
     {
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
@@ -3967,7 +3996,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_D(inst)) == 2 || intOp(OP_D(inst)) == 3);
         inst.regA64 = regs.allocReg(KindA64::q, index);
@@ -3989,7 +4018,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
 
-    case IrCmd::BUFFER_WRITEVECTOR:
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
     {
         CODEGEN_ASSERT(intOp(OP_E(inst)) == 2 || intOp(OP_E(inst)) == 3);
         RegisterA64 value = regOp(OP_C(inst));

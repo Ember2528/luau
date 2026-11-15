@@ -712,7 +712,7 @@ struct ConstPropState
         if (uint32_t* prevIdx = getPreviousInstIndex(versionedLoad))
         {
             IrInst& store = function.instructions[*prevIdx];
-            CODEGEN_ASSERT(store.cmd == IrCmd::STORE_VECTOR);
+            CODEGEN_ASSERT(store.cmd == IrCmd::LEGACY_STORE_VECTOR);
 
             IrOp argOp;
 
@@ -1701,7 +1701,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 IrInst& prev = function.instructions[prevIdx];
 
                 // Unpack the STORE_TVALUE of a TAG_VECTOR value
-                if (prev.cmd == IrCmd::TAG_VECTOR)
+                if (prev.cmd == IrCmd::LEGACY_TAG_VECTOR)
                 {
                     if (function.asInstOp(OP_A(prev)))
                         prevIdx = OP_A(prev).index;
@@ -1742,7 +1742,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                     }
                 }
 
-                replace(function, block, index, IrInst{IrCmd::EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
+                replace(function, block, index, IrInst{IrCmd::LEGACY_EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
 
                 state.substituteOrRecord(inst, index);
                 break;
@@ -1983,7 +1983,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             }
         }
         break;
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
         state.invalidateValue(OP_A(inst));
 
         // To avoid captured register invalidation tracking in lowering later, values from loads from captured registers are not propagated
@@ -2525,9 +2525,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::BUFFER_WRITEI64:
         state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READI64, 8);
         break;
-    case IrCmd::BUFFER_READVECTOR:
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
         break;
-    case IrCmd::BUFFER_WRITEVECTOR:
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
         CODEGEN_ASSERT(OP_E(inst).kind == IrOpKind::Constant);
         state.invalidateBufferRange(
             inst, uint8_t(function.intOp(OP_E(inst)) * sizeof(float)), function.tagOp(OP_D(inst)), function.asIntOp(OP_B(inst)));
@@ -2734,9 +2734,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
     case IrCmd::SELECT_INT64:
-    case IrCmd::SELECT_VEC:
-    case IrCmd::MULADD_VEC:
-    case IrCmd::EXTRACT_VEC:
+    case IrCmd::LEGACY_SELECT_VEC:
+    case IrCmd::LEGACY_MULADD_VEC:
+    case IrCmd::LEGACY_EXTRACT_VEC:
     case IrCmd::NOT_ANY:
         state.substituteOrRecord(inst, index);
         break;
@@ -3195,52 +3195,52 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.checkSlotMatchCache.push_back({index, true});
         break;
 
-    case IrCmd::ADD_VEC:
-    case IrCmd::SUB_VEC:
-    case IrCmd::MUL_VEC:
-    case IrCmd::DIV_VEC:
-    case IrCmd::IDIV_VEC:
-    case IrCmd::MIN_VEC:
-    case IrCmd::MAX_VEC:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::TAG_VECTOR)
+    case IrCmd::LEGACY_ADD_VEC:
+    case IrCmd::LEGACY_SUB_VEC:
+    case IrCmd::LEGACY_MUL_VEC:
+    case IrCmd::LEGACY_DIV_VEC:
+    case IrCmd::LEGACY_IDIV_VEC:
+    case IrCmd::LEGACY_MIN_VEC:
+    case IrCmd::LEGACY_MAX_VEC:
+        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
             replace(function, OP_A(inst), OP_A(a));
 
-        if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::TAG_VECTOR)
+        if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::LEGACY_TAG_VECTOR)
             replace(function, OP_B(inst), OP_A(b));
 
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::DOT_VEC:
+    case IrCmd::LEGACY_DOT_VEC:
         if (!FFlag::LuauCodegenMultiLaneDot || function.intOp(OP_C(inst)) == 3)
         {
-            if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::TAG_VECTOR)
+            if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
                 replace(function, OP_A(inst), OP_A(a));
 
-            if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::TAG_VECTOR)
+            if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::LEGACY_TAG_VECTOR)
                 replace(function, OP_B(inst), OP_A(b));
         }
 
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::UNM_VEC:
-    case IrCmd::FLOOR_VEC:
-    case IrCmd::CEIL_VEC:
-    case IrCmd::ABS_VEC:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::TAG_VECTOR)
+    case IrCmd::LEGACY_UNM_VEC:
+    case IrCmd::LEGACY_FLOOR_VEC:
+    case IrCmd::LEGACY_CEIL_VEC:
+    case IrCmd::LEGACY_ABS_VEC:
+        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
             replace(function, OP_A(inst), OP_A(a));
 
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::FLOAT_TO_VEC:
-    case IrCmd::TAG_VECTOR:
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
+    case IrCmd::LEGACY_TAG_VECTOR:
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::UNTAG_VECTOR:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::UNTAG_VECTOR)
+    case IrCmd::LEGACY_UNTAG_VECTOR:
+        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_UNTAG_VECTOR)
             substitute(function, inst, OP_A(inst));
         else
             state.substituteOrRecord(inst, index);

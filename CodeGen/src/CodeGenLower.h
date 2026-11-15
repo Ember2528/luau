@@ -244,6 +244,10 @@ inline bool lowerImpl(
                 toStringDetailed(ctx, block, blockIndex, inst, index, options.includeUseInfo);
             }
 
+            // A wide TValue's SIMD payload does not contain its tag. Catch incomplete
+            // whole-value stores from translation, optimizations or host IR hooks.
+            CODEGEN_ASSERT(sizeof(TValue) == 16 || inst.cmd != IrCmd::STORE_TVALUE || HAS_OP_D(inst));
+
             lowering.lowerInst(inst, index, nextBlock);
 
             if (lowering.hasError())
@@ -349,6 +353,104 @@ inline bool lowerIr(
     return lowerImpl(logger, build, lowering, ir.function, sortedBlocks, proto ? proto->bytecodeid : 0, options);
 }
 
+// Select a component-store encoding only after semantic optimizations are finished.
+// Keeping the combine adjacent avoids moving operand uses across calls or guards.
+inline void combineVectorStore(IrFunction& function, IrBlock& block, uint32_t index)
+{
+    IrInst& value = function.instructions[index];
+    if (value.useCount != 1)
+        return;
+
+    uint32_t storeIndex = index + 1;
+    while (storeIndex <= block.finish && isPseudo(function.instructions[storeIndex].cmd))
+        ++storeIndex;
+    if (storeIndex > block.finish)
+        return;
+
+    IrInst& store = function.instructions[storeIndex];
+    if (store.cmd == IrCmd::STORE_VEC && OP_B(store) == IrOp{IrOpKind::Inst, index})
+    {
+        IrOps operands{OP_A(store)};
+        for (IrOp component : value.ops)
+            operands.push_back(component);
+        replace(function, block, storeIndex, {IrCmd::STORE_VEC_COMPONENTS, operands});
+    }
+}
+
+inline void updateLastUseForOp(IrFunction& function, uint32_t instIdx, IrOp op)
+{
+    if (op.kind == IrOpKind::Inst)
+    {
+        function.instructions[op.index].lastUse = uint32_t(instIdx);
+    }
+    else if (op.kind == IrOpKind::Block && function.blockOp(op).kind == IrBlockKind::ExitSync)
+    {
+        if (VmExitSyncInfo* syncInfo = function.vmExitInfo.find(instIdx))
+        {
+            for (auto argOp : syncInfo->argOps)
+                updateLastUseForOp(function, instIdx, argOp);
+        }
+    }
+}
+
+// Select final instruction encodings and compute operand lifetimes in the same walk.
+inline void finalizeFunctionForLowering(IrFunction& function, const std::vector<uint32_t>& sortedBlocks)
+{
+    std::vector<IrInst>& instructions = function.instructions;
+
+#if defined(LUAU_ASSERTENABLED)
+    // Last use assignments should be called only once
+    for (IrInst& inst : instructions)
+        CODEGEN_ASSERT(inst.lastUse == 0);
+#endif
+
+    for (size_t i = 0; i < sortedBlocks.size(); ++i)
+    {
+        uint32_t blockIndex = sortedBlocks[i];
+        IrBlock& block = function.blocks[blockIndex];
+
+        if (block.kind == IrBlockKind::Dead)
+            continue;
+
+        VmExitSyncInfo* syncInfo = nullptr;
+
+        if (block.kind == IrBlockKind::ExitSync)
+        {
+            if (const uint32_t* key = function.blockToVmExitMap.find(blockIndex))
+                syncInfo = function.vmExitInfo.find(*key);
+
+            CODEGEN_ASSERT(syncInfo);
+        }
+
+        CODEGEN_ASSERT(block.start != ~0u);
+        CODEGEN_ASSERT(block.finish != ~0u);
+
+        for (uint32_t instIdx = block.start; instIdx <= block.finish; instIdx++)
+        {
+            CODEGEN_ASSERT(instIdx < function.instructions.size());
+            IrInst& inst = instructions[instIdx];
+
+            if (inst.cmd == IrCmd::BUILD_VEC)
+                combineVectorStore(function, block, instIdx);
+
+            if (isPseudo(inst.cmd))
+                continue;
+
+            for (IrOp& op : inst.ops)
+            {
+                if (syncInfo)
+                {
+                    if (std::find(syncInfo->argOps.begin(), syncInfo->argOps.end(), op) != syncInfo->argOps.end())
+                        continue;
+                }
+
+                updateLastUseForOp(function, instIdx, op);
+            }
+        }
+    }
+}
+
+
 template<typename AssemblyBuilder>
 inline bool lowerFunction(
     IrBuilder& ir,
@@ -431,8 +533,8 @@ inline bool lowerFunction(
 
     std::vector<uint32_t> sortedBlocks = getSortedBlockOrder(ir.function);
 
-    // In order to allocate registers during lowering, we need to know where instruction results are last used
-    updateLastUseLocations(ir.function, sortedBlocks);
+    // Final instruction selection must precede lifetime assignment for register allocation.
+    finalizeFunctionForLowering(ir.function, sortedBlocks);
 
     if (stats)
     {

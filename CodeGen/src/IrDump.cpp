@@ -98,6 +98,48 @@ const char* getCmdName(IrCmd cmd)
 {
     switch (cmd)
     {
+    case IrCmd::LEGACY_STORE_VECTOR:
+        return "STORE_VECTOR";
+    case IrCmd::LEGACY_SELECT_VEC:
+        return "SELECT_VEC";
+    case IrCmd::LEGACY_ADD_VEC:
+        return "ADD_VEC";
+    case IrCmd::LEGACY_SUB_VEC:
+        return "SUB_VEC";
+    case IrCmd::LEGACY_MUL_VEC:
+        return "MUL_VEC";
+    case IrCmd::LEGACY_DIV_VEC:
+        return "DIV_VEC";
+    case IrCmd::LEGACY_IDIV_VEC:
+        return "IDIV_VEC";
+    case IrCmd::LEGACY_MULADD_VEC:
+        return "MULADD_VEC";
+    case IrCmd::LEGACY_UNM_VEC:
+        return "UNM_VEC";
+    case IrCmd::LEGACY_MIN_VEC:
+        return "MIN_VEC";
+    case IrCmd::LEGACY_MAX_VEC:
+        return "MAX_VEC";
+    case IrCmd::LEGACY_FLOOR_VEC:
+        return "FLOOR_VEC";
+    case IrCmd::LEGACY_CEIL_VEC:
+        return "CEIL_VEC";
+    case IrCmd::LEGACY_ABS_VEC:
+        return "ABS_VEC";
+    case IrCmd::LEGACY_DOT_VEC:
+        return "DOT_VEC";
+    case IrCmd::LEGACY_EXTRACT_VEC:
+        return "EXTRACT_VEC";
+    case IrCmd::LEGACY_FLOAT_TO_VEC:
+        return "FLOAT_TO_VEC";
+    case IrCmd::LEGACY_TAG_VECTOR:
+        return "TAG_VECTOR";
+    case IrCmd::LEGACY_UNTAG_VECTOR:
+        return "UNTAG_VECTOR";
+    case IrCmd::LEGACY_BUFFER_READVECTOR:
+        return "BUFFER_READVECTOR";
+    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+        return "BUFFER_WRITEVECTOR";
     case IrCmd::NOP:
         return "NOP";
     case IrCmd::LOAD_TAG:
@@ -112,6 +154,8 @@ const char* getCmdName(IrCmd cmd)
         return "LOAD_FLOAT";
     case IrCmd::LOAD_TVALUE:
         return "LOAD_TVALUE";
+    case IrCmd::LOAD_VEC:
+        return "LOAD_VEC";
     case IrCmd::LOAD_ENV:
         return "LOAD_ENV";
     case IrCmd::GET_ARR_ADDR:
@@ -132,8 +176,10 @@ const char* getCmdName(IrCmd cmd)
         return "STORE_DOUBLE";
     case IrCmd::STORE_INT:
         return "STORE_INT";
-    case IrCmd::STORE_VECTOR:
-        return "STORE_VECTOR";
+    case IrCmd::STORE_VEC_COMPONENTS:
+        return "STORE_VEC_COMPONENTS";
+    case IrCmd::STORE_VEC:
+        return "STORE_VEC";
     case IrCmd::STORE_TVALUE:
         return "STORE_TVALUE";
     case IrCmd::STORE_SPLIT_TVALUE:
@@ -328,8 +374,12 @@ const char* getCmdName(IrCmd cmd)
         return "FLOAT_TO_NUM";
     case IrCmd::NUM_TO_FLOAT:
         return "NUM_TO_FLOAT";
+    case IrCmd::BUILD_VEC:
+        return "BUILD_VEC";
     case IrCmd::FLOAT_TO_VEC:
         return "FLOAT_TO_VEC";
+    case IrCmd::TVALUE_TO_VEC:
+        return "TVALUE_TO_VEC";
     case IrCmd::TAG_VECTOR:
         return "TAG_VECTOR";
     case IrCmd::UNTAG_VECTOR:
@@ -366,6 +416,8 @@ const char* getCmdName(IrCmd cmd)
         return "CONCAT";
     case IrCmd::GET_UPVALUE:
         return "GET_UPVALUE";
+    case IrCmd::GET_UPVALUE_ADDR:
+        return "GET_UPVALUE_ADDR";
     case IrCmd::SET_UPVALUE:
         return "SET_UPVALUE";
     case IrCmd::CHECK_TAG:
@@ -598,6 +650,8 @@ const char* getValueKindName(IrValueKind kind)
         return "double";
     case IrValueKind::Tvalue:
         return "tvalue";
+    case IrValueKind::Vector:
+        return "vector";
     case IrValueKind::Count:
         CODEGEN_ASSERT(!"invalid value kind");
     }

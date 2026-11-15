@@ -115,7 +115,9 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::STORE_POINTER:
     case IrCmd::STORE_DOUBLE:
     case IrCmd::STORE_INT:
-    case IrCmd::STORE_VECTOR:
+    case IrCmd::LEGACY_STORE_VECTOR:
+    case IrCmd::STORE_VEC_COMPONENTS:
+    case IrCmd::STORE_VEC:
     case IrCmd::STORE_TVALUE:
     case IrCmd::STORE_SPLIT_TVALUE:
         invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
@@ -149,6 +151,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
         invalidateRestoreVmRegs(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
         break;
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::CALL:
         // Even if result count is limited, all registers starting from function (ra) might be modified
@@ -183,6 +186,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::LOAD_INT:
     case IrCmd::LOAD_FLOAT:
     case IrCmd::LOAD_TVALUE:
+    case IrCmd::LOAD_VEC:
     case IrCmd::CMP_ANY:
     case IrCmd::CMP_TAG:
     case IrCmd::JUMP_IF_TRUTHY:
@@ -243,6 +247,7 @@ void IrValueLocationTracking::afterInstLowering(IrInst& inst, uint32_t instIdx)
     case IrCmd::LOAD_DOUBLE:
     case IrCmd::LOAD_INT:
     case IrCmd::LOAD_TVALUE:
+    case IrCmd::LOAD_VEC:
         if (OP_A(inst).kind == IrOpKind::VmReg)
             invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
 
@@ -252,6 +257,7 @@ void IrValueLocationTracking::afterInstLowering(IrInst& inst, uint32_t instIdx)
     case IrCmd::STORE_DOUBLE:
     case IrCmd::STORE_INT:
     case IrCmd::STORE_TVALUE:
+    case IrCmd::STORE_VEC:
         // If this is not the last use of the stored value, we can restore it from this new location
         // Additionally, even if it's a last use, it might allow its argument to be restored
         if (OP_B(inst).kind == IrOpKind::Inst)
@@ -379,6 +385,7 @@ void IrValueLocationTracking::invalidateRestoreOp(IrOp location, bool skipValueI
             {
                 switch (getCmdValueKind(inst.cmd))
                 {
+                case IrValueKind::Vector:
                 case IrValueKind::Double:
                 case IrValueKind::Pointer:
                 case IrValueKind::Int:
