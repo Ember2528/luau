@@ -2625,11 +2625,19 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterA64 temp1w = castReg(KindA64::w, temp1);
         RegisterA64 temp2 = regs.allocTemp(KindA64::x);
 
-        static_assert(offsetof(LuaNode, key.value) == offsetof(LuaNode, key) && kOffsetOfTKeyTagNext >= 8 && kOffsetOfTKeyTagNext < 16);
-        build.ldp(
-            temp1, temp2, mem(regOp(OP_A(inst)), offsetof(LuaNode, key))
-        ); // load key.value into temp1 and key.tt (alongside other bits) into temp2
-        build.ubfx(temp2, temp2, (kOffsetOfTKeyTagNext - 8) * 8, kTKeyTagBits); // .tt is right before .next, and 8 bytes are skipped by ldp
+        static_assert(offsetof(LuaNode, key.value) == offsetof(LuaNode, key));
+        if constexpr (sizeof(TValue) == 16)
+        {
+            // The compact key fits in two registers, including its tag/next bitfield.
+            build.ldp(temp1, temp2, mem(regOp(OP_A(inst)), offsetof(LuaNode, key)));
+            build.ubfx(temp2, temp2, (kOffsetOfTKeyTagNext - 8) * 8, kTKeyTagBits);
+        }
+        else
+        {
+            build.ldr(temp1, mem(regOp(OP_A(inst)), offsetof(LuaNode, key)));
+            build.ldr(castReg(KindA64::w, temp2), mem(regOp(OP_A(inst)), LUAU_NODE_KEY_TAG_NEXT_OFFSET));
+            build.ubfx(temp2, temp2, 0, kTKeyTagBits);
+        }
         build.cmp(temp2, uint16_t(LUA_TSTRING));
         build.b(ConditionA64::NotEqual, mismatch);
 
@@ -2653,7 +2661,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         Label fresh; // used when guard aborts execution or jumps to a VM exit
         RegisterA64 temp = regs.allocTemp(KindA64::w);
 
-        build.ldr(temp, mem(regOp(OP_A(inst)), offsetof(LuaNode, key) + kOffsetOfTKeyTagNext));
+        build.ldr(temp, mem(regOp(OP_A(inst)), LUAU_NODE_KEY_TAG_NEXT_OFFSET));
         build.lsr(temp, temp, kTKeyTagBits);
         build.cbnz(temp, getTargetLabel(OP_B(inst), index, fresh));
         finalizeTargetLabel(OP_B(inst), index, fresh);

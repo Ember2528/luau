@@ -2445,7 +2445,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     {
         ScopedRegX64 tmp{regs, SizeX64::dword};
 
-        build.mov(tmp.reg, dword[regOp(OP_A(inst)) + offsetof(LuaNode, key) + kOffsetOfTKeyTagNext]);
+        build.mov(tmp.reg, dword[regOp(OP_A(inst)) + LUAU_NODE_KEY_TAG_NEXT_OFFSET]);
         build.shr(tmp.reg, kTKeyTagBits);
         jumpOrAbortOnUndef(ConditionX64::NotZero, OP_B(inst), index, next);
         break;

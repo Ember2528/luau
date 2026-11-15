@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Label.h"
+#include "luaconf.h"
 
 namespace Luau
 {
@@ -12,7 +13,13 @@ constexpr unsigned kTValueSizeLog2 = 4;
 constexpr unsigned kLuaNodeSizeLog2 = 5;
 
 // TKey.tt and TKey.next are packed together in a bitfield
-constexpr unsigned kOffsetOfTKeyTagNext = 12; // offsetof cannot be used on a bit field
+constexpr unsigned kOffsetOfTKeyTagNext = 8 + LUA_EXTRA_SIZE * sizeof(int); // offsetof cannot be used on a bit field
+// Absolute offset from LuaNode, expanded only where the VM layout is visible.
+#if defined(LUAU_T24_PACKED_NODE)
+#define LUAU_NODE_KEY_TAG_NEXT_OFFSET offsetof(TValue, nodekey)
+#else
+#define LUAU_NODE_KEY_TAG_NEXT_OFFSET (offsetof(LuaNode, key) + kOffsetOfTKeyTagNext)
+#endif
 constexpr unsigned kTKeyTagBits = 4;
 constexpr unsigned kTKeyTagMask = (1 << kTKeyTagBits) - 1;
 
