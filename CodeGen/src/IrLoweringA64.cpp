@@ -3425,7 +3425,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     {
         // register layout: ra + 1 = table, ra + 2 = internal index, ra + 3 .. ra + aux = iteration variables
         regs.spill(index);
-
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+        Label compactFrozen, compactLive, compactNodeFallback;
+        bool emitCompactFrozen = false;
+#endif
 #if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
     (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
         // x1 is the freshly loaded table and w2 the numeric cursor. A live
@@ -3434,8 +3437,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // guards have passed.
         const bool denseNodeLayoutSupported = isDenseIteratorKeyLayoutSupported();
         auto emitLiveNodeFastPath = [&]() {
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+            Label& nodeFallback = compactNodeFallback;
+#else
             Label nodeFallback;
-#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH)
+#endif
+#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH) && !LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
             // The published index makes the ordinary helper efficient for gaps.
             build.ldrb(w4, mem(x1, offsetof(LuaTable, readonly)));
             build.tbnz(w4, kFrozenHashIndexBit, nodeFallback);
@@ -3449,6 +3456,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.lsl(w6, w6, w5);
             build.cmp(w4, w6);
             build.b(ConditionA64::UnsignedGreaterEqual, nodeFallback);
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+            // w4=relative cursor, w6=capacity. Reuse the now-dead exponent
+            // scratch for the owner check; w2 remains unchanged on failure.
+            emitCompactFrozen = true;
+            build.ldrb(w5, mem(x1, offsetof(LuaTable, readonly)));
+            build.tbnz(w5, kFrozenHashIndexBit, compactFrozen);
+#endif
             build.ldr(x5, mem(x1, offsetof(LuaTable, node)));
             if constexpr (sizeof(LuaNode) == 40)
             {
@@ -3462,7 +3476,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             }
             build.ldr(w6, mem(x5, offsetof(LuaNode, val) + offsetof(TValue, tt)));
             build.cbz(w6, nodeFallback);
-
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+            build.setLabel(compactLive);
+#endif
             // getnodekey copies the complete 16-byte payload, including all
             // four vector lanes, then decodes the tag from the key bitfield.
             build.add(x4, x5, uint16_t(offsetof(LuaNode, key) + offsetof(TKey, value)));
@@ -3586,6 +3602,37 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cbnz(w0, labelOp(OP_C(inst)));
         }
 
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+        if (emitCompactFrozen)
+        {
+            Label afterCompactFrozen;
+            build.b(afterCompactFrozen); // only the exhausted helper path
+            build.setLabel(compactFrozen);
+            // Existing x4/x5/x6 only. Capacity is consumed to locate the
+            // sidecar, then reconstructed before validating the linked slot.
+            build.add(x5, x6, x6, 2); // capacity*5
+            build.ldr(x6, mem(x1, offsetof(LuaTable, node)));
+            build.add(x5, x6, x5, 3); // base+capacity*40
+            build.add(x5, x5, x4, 2); // +relativeCursor*4
+            build.ldr(w4, mem(x5, 0));
+            build.ldrb(w5, mem(x1, offsetof(LuaTable, lsizenode)));
+            build.mov(w6, 1);
+            build.lsl(w6, w6, w5);
+            build.cmp(w4, w6);
+            build.b(ConditionA64::UnsignedGreaterEqual, compactNodeFallback);
+            build.ldr(x5, mem(x1, offsetof(LuaTable, node)));
+            build.ldr(w6, mem(x1, offsetof(LuaTable, sizearray)));
+            build.add(w6, w6, w4); // chosen global numeric cursor
+            build.add(x4, x4, x4, 2);
+            build.add(x5, x5, x4, 3);
+            build.mov(w4, w6); // preserve chosen cursor while loading tag
+            build.ldr(w6, mem(x5, offsetof(LuaNode, val) + offsetof(TValue, tt)));
+            build.cbz(w6, compactNodeFallback);
+            build.mov(w2, w4); // commit only after all guards
+            build.b(compactLive);
+            build.setLabel(afterCompactFrozen);
+        }
+#endif
         jumpOrFallthrough(blockOp(OP_D(inst)), next);
         break;
     }

@@ -423,6 +423,14 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     regs.takeReg(table, kInvalidInstIdx); // table/index are preloaded above, have to take ownership so the wrapper can free them
     regs.takeReg(index, kInvalidInstIdx);
 
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+    // Capture exactly the existing three scratch registers at the branch
+    // point. The no-call handler is emitted after the helper block, keeping
+    // its work and any extra jump out of the ordinary live-node hot path.
+    Label compactFrozen, compactLive, compactNodeFallback;
+    RegisterX64 compactShift = noreg, compactNode = noreg, compactOffset = noreg;
+    bool emitCompactFrozen = false;
+#endif
 #if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
     (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
     // A live current node can be returned directly. Complete every guard
@@ -433,9 +441,13 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         ScopedRegX64 shift{regs, regs.takeReg(rcx, kInvalidInstIdx)};
         ScopedRegX64 node{regs, SizeX64::qword};
         ScopedRegX64 offset{regs, SizeX64::qword};
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+        Label& nodeFallback = compactNodeFallback;
+#else
         Label nodeFallback;
+#endif
 
-#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH)
+#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH) && !LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
         // Published sparse indices already let the helper jump over gaps.
         build.test(byte[table + offsetof(LuaTable, readonly)], kFrozenHashIndexMask);
         build.jcc(ConditionX64::NotZero, nodeFallback);
@@ -447,13 +459,23 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
         build.shl(dwordReg(node.reg), byteReg(shift.reg));
         build.cmp(dwordReg(offset.reg), dwordReg(node.reg));
         build.jcc(ConditionX64::NotBelow, nodeFallback);
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+        compactShift = shift.reg;
+        compactNode = node.reg;
+        compactOffset = offset.reg;
+        emitCompactFrozen = true;
+        build.test(byte[table + offsetof(LuaTable, readonly)], kFrozenHashIndexMask);
+        build.jcc(ConditionX64::NotZero, compactFrozen);
+#endif
 
         build.mov(node.reg, qword[table + offsetof(LuaTable, node)]);
         scaleLuaNodeIndex(build, offset.reg);
         build.add(node.reg, offset.reg);
         build.cmp(dword[node.reg + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
         build.jcc(ConditionX64::Equal, nodeFallback);
-
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+        build.setLabel(compactLive);
+#endif
         build.inc(index);
         build.mov(luauRegValue(ra + 2), index);
         // getnodekey: copy the full key payload including all vector lanes,
@@ -477,6 +499,34 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     callWrapper.call(qword[rNativeContext + offsetof(NativeContext, forgLoopNodeIter)]);
     build.test(al, al);
     build.jcc(ConditionX64::NotZero, loopRepeat);
+#if LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE
+    if (emitCompactFrozen)
+    {
+        Label afterCompactFrozen;
+        build.jmp(afterCompactFrozen); // only the exhausted helper path
+        build.setLabel(compactFrozen);
+        // At entry compactNode is capacity, compactOffset is the relative
+        // numeric cursor. RCX forms the trailing uint32_t-plane address while
+        // capacity remains available for the linked-index range check.
+        build.imul(compactShift, compactNode, int32_t(sizeof(LuaNode)));
+        build.add(compactShift, qword[table + offsetof(LuaTable, node)]);
+        build.mov(dwordReg(compactOffset), dword[compactShift + compactOffset * 4]);
+        build.cmp(dwordReg(compactOffset), dwordReg(compactNode));
+        build.jcc(ConditionX64::NotBelow, compactNodeFallback);
+        build.mov(dwordReg(compactShift), dwordReg(compactOffset));
+        build.add(dwordReg(compactShift), dword[table + offsetof(LuaTable, sizearray)]);
+        build.mov(compactNode, qword[table + offsetof(LuaTable, node)]);
+        scaleLuaNodeIndex(build, compactOffset);
+        build.add(compactNode, compactOffset);
+        build.cmp(dword[compactNode + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
+        build.jcc(ConditionX64::Equal, compactNodeFallback);
+        // All failure edges precede this real cursor change and every result
+        // store. RCX is then free for the shared key-tag decode.
+        build.mov(index, compactShift);
+        build.jmp(compactLive);
+        build.setLabel(afterCompactFrozen);
+    }
+#endif
 }
 
 } // namespace X64

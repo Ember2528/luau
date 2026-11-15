@@ -20,6 +20,14 @@ constexpr unsigned kOffsetOfTKeyTagNext = 8 + LUA_EXTRA_SIZE * sizeof(int); // o
 #else
 #define LUAU_NODE_KEY_TAG_NEXT_OFFSET (offsetof(LuaNode, key) + kOffsetOfTKeyTagNext)
 #endif
+#if defined(LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_RESEARCH)
+#if !defined(LUAU_T24_PACKED_NODE) || !defined(LUAU_T24_COMPACT_VECTOR_CACHE_RESEARCH) || !defined(LUAU_T24_COMPACT_FROZEN_HASH_SKIP_RESEARCH) || !defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH)
+#error "Compact frozen inline iteration requires packed cache/dense/frozen planes"
+#endif
+#define LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE 1
+#else
+#define LUAU_T24_COMPACT_FROZEN_INLINE_NATIVE_ACTIVE 0
+#endif
 constexpr unsigned kTKeyTagBits = 4;
 constexpr unsigned kTKeyTagMask = (1 << kTKeyTagBits) - 1;
 
