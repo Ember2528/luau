@@ -180,7 +180,9 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
 
             const TValue* res = luaH_get(h, key); // do a primitive get
 
-            if (res != luaO_nilobject)
+            // A numeric result can belong to the array part, not the node
+            // array. Only string field instructions use this hash-slot hint.
+            if (res != luaO_nilobject && ttisstring(key))
                 L->cachedslot = gval2slot(h, res); // remember slot to accelerate future lookups
 
             if (LUAU_LIKELY(!ttisnil(res)))
@@ -263,7 +265,23 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
         { // `t' is a table?
             LuaTable* h = hvalue(t);
 
+#if LUAU_T24_NUMERIC_KEY_HASH
+            // Prefer the numeric slow path first while retaining the direct
+            // string lookup and callback-free numeric/vector query hashes.
+            const int keyType = ttype(key);
+            uint32_t queryHash = 0;
+            const TValue* oldval;
+            if (keyType == LUA_TNUMBER)
+                oldval = luaH_getnumberwithhash(h, key, &queryHash);
+            else if (keyType == LUA_TSTRING)
+                oldval = luaH_getstr(h, tsvalue(key));
+            else if (keyType == LUA_TVECTOR)
+                oldval = luaH_getvectorwithhash(h, key, &queryHash);
+            else
+                oldval = luaH_get(h, key);
+#else
             const TValue* oldval = luaH_get(h, key);
+#endif
 
             // should we assign the key? (if key is valid or __newindex is not set)
             if (!ttisnil(oldval) || (tm = fasttm(L, h->metatable, TM_NEWINDEX)) == NULL)
@@ -272,9 +290,29 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
                     luaG_readonlyerror(L);
 
                 // luaH_set would work but would repeat the lookup so we use luaH_setslot that can reuse oldval if it's safe
+                // The key can be stack-backed and table insertion can allocate.
+#if LUAU_T24_NUMERIC_KEY_HASH
+                const bool cacheable = keyType == LUA_TSTRING;
+                TValue* newval;
+                if (keyType == LUA_TNUMBER && oldval == luaO_nilobject)
+                {
+                    invalidateTMcache(h);
+                    newval = luaH_newnumberwithhash(L, h, key, queryHash);
+                }
+                else if (keyType == LUA_TVECTOR && oldval == luaO_nilobject)
+                {
+                    invalidateTMcache(h);
+                    newval = luaH_newvectorwithhash(L, h, key, queryHash);
+                }
+                else
+                    newval = luaH_setslot(L, h, oldval, key);
+#else
+                const bool cacheable = ttisstring(key);
                 TValue* newval = luaH_setslot(L, h, oldval, key);
+#endif
 
-                L->cachedslot = gval2slot(h, newval); // remember slot to accelerate future lookups
+                if (cacheable)
+                    L->cachedslot = gval2slot(h, newval); // remember slot to accelerate future lookups
 
                 setobj2t(L, newval, val);
                 luaC_barriert(L, h, val);

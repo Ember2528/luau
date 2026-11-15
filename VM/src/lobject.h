@@ -6,6 +6,7 @@
 #include "lcommon.h"
 #include "lbytecode.h"
 
+
 /*
 ** Union of all collectible objects
 */
@@ -542,6 +543,12 @@ typedef struct Closure
 ** Tables
 */
 
+#if defined(LUAU_T24_NUMERIC_KEY_HASH_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0 && UINTPTR_MAX == UINT64_MAX
+#define LUAU_T24_NUMERIC_KEY_HASH 1
+#else
+#define LUAU_T24_NUMERIC_KEY_HASH 0
+#endif
+
 typedef struct TKey
 {
     ::Value value;
@@ -549,6 +556,12 @@ typedef struct TKey
     unsigned tt : 4;
     int next : 28; // for chaining
 } TKey;
+
+#define LUAU_T24_FROZEN_HASH_SKIP_ACTIVE 0
+
+#if LUAU_T24_NUMERIC_KEY_HASH
+static_assert(sizeof(TKey) == 24 && offsetof(TKey, extra) == 8 && LUA_EXTRA_SIZE == 2, "unexpected numeric key hash layout");
+#endif
 
 typedef struct LuaNode
 {

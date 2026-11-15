@@ -9,6 +9,7 @@
 #define gval(n) (&(n)->val)
 #define gnext(n) ((n)->key.next)
 
+
 #define gval2slot(t, v) int(cast_to(LuaNode*, static_cast<const TValue*>(v)) - t->node)
 
 // reset cache of absent metamethods, cache is updated in luaT_gettm
@@ -23,6 +24,13 @@ LUAI_FUNC TValue* luaH_setp(lua_State* L, LuaTable* t, void* key, int tag);
 LUAI_FUNC const TValue* luaH_get(LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key);
+#if LUAU_T24_NUMERIC_KEY_HASH
+// Valid for only the primitive lookup/insertion attempt; discarded on rehash.
+LUAI_FUNC const TValue* luaH_getnumberwithhash(LuaTable* t, const TValue* key, uint32_t* hash);
+LUAI_FUNC TValue* luaH_newnumberwithhash(lua_State* L, LuaTable* t, const TValue* key, uint32_t hash);
+LUAI_FUNC const TValue* luaH_getvectorwithhash(LuaTable* t, const TValue* key, uint32_t* hash);
+LUAI_FUNC TValue* luaH_newvectorwithhash(lua_State* L, LuaTable* t, const TValue* key, uint32_t hash);
+#endif
 LUAI_FUNC LuaTable* luaH_new(lua_State* L, int narray, int lnhash);
 LUAI_FUNC void luaH_resizearray(lua_State* L, LuaTable* t, int nasize);
 LUAI_FUNC void luaH_resizehash(lua_State* L, LuaTable* t, int nhsize);

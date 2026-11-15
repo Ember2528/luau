@@ -83,7 +83,7 @@ static LuaNode* hashpointer(const LuaTable* t, const void* p)
     return hashpow2(t, h);
 }
 
-static LuaNode* hashnum(const LuaTable* t, double n)
+static uint32_t numericHash(double n)
 {
     static_assert(sizeof(double) == sizeof(unsigned int) * 2, "expected a 8-byte double");
     unsigned int i[2];
@@ -109,10 +109,28 @@ static LuaNode* hashnum(const LuaTable* t, double n)
     }
 
     // ... truncated to 32-bit output (normally hash is equal to (uint64_t(h1) << 32) | h2, but we only really need the lower 32-bit half)
-    return hashpow2(t, h2);
+    return h2;
 }
 
-LUAU_MAYBE_UNUSED static LuaNode* hashvec(const LuaTable* t, const float* v)
+static LuaNode* hashnum(const LuaTable* t, double n) { return hashpow2(t, numericHash(n)); }
+
+#if LUAU_T24_NUMERIC_KEY_HASH
+// Number TKeys use only the first eight payload bytes. The first extra lane
+// is key-owned metadata; vector and lightuserdata keys keep their lanes.
+static uint32_t numericKeyHash(const TKey* key)
+{
+    uint32_t hash;
+    memcpy(&hash, &key->extra[0], sizeof(hash));
+    return hash;
+}
+
+static void setNumericKeyHash(TKey* key, uint32_t hash)
+{
+    memcpy(&key->extra[0], &hash, sizeof(hash));
+}
+#endif
+
+LUAU_MAYBE_UNUSED static uint32_t vectorHash(const float* v)
 {
     unsigned int i[LUA_VECTOR_SIZE];
     memcpy(i, v, sizeof(i));
@@ -139,10 +157,10 @@ LUAU_MAYBE_UNUSED static LuaNode* hashvec(const LuaTable* t, const float* v)
     h ^= i[3] * 39916801;
 #endif
 
-    return hashpow2(t, h);
+    return h;
 }
 
-static LUAU_MAYBE_UNUSED LuaNode* hashvec(const LuaTable* t, const double* v)
+static LUAU_MAYBE_UNUSED uint32_t vectorHash(const double* v)
 {
     uint64_t i[LUA_VECTOR_SIZE];
     memcpy(i, v, sizeof(i));
@@ -169,7 +187,12 @@ static LUAU_MAYBE_UNUSED LuaNode* hashvec(const LuaTable* t, const double* v)
     h ^= uint32_t(i[3] * 39916801);
 #endif
 
-    return hashpow2(t, h);
+    return h;
+}
+
+static LUAU_MAYBE_UNUSED LuaNode* hashvec(const LuaTable* t, const LUA_VECTOR_TYPE* v)
+{
+    return hashpow2(t, vectorHash(v));
 }
 
 /*
@@ -438,7 +461,8 @@ int luaH_next(lua_State* L, LuaTable* t, StkId key)
             return 1;
         }
     }
-    for (i -= t->sizearray; i < sizenode(t); i++)
+    i -= t->sizearray;
+    for (; i < sizenode(t); i++)
     { // then hash part
         if (!ttisnil(gval(gnode(t, i))))
         { // a non-nil value?
@@ -638,7 +662,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
     t->lastfree = size; // all positions are free
 }
 
-static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool checkarraypart);
+static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool checkarraypart, const TKey* oldkey = nullptr);
 
 static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 {
@@ -747,7 +771,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         {
             TValue ok;
             getnodekey(L, &ok, old);
-            setobjt2t(L, reinsertkey(L, t, &ok, true), gval(old));
+            setobjt2t(L, reinsertkey(L, t, &ok, true, gkey(old)), gval(old));
         }
     }
 
@@ -908,13 +932,31 @@ static LuaNode* getfreepos(LuaTable* t)
     return NULL; // could not find a free place
 }
 
+template<bool UseNumericHash>
 static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode* n)
 {
     LUAU_ASSERT(n != dummynode);
 
-    TValue mk;
-    getnodekey(L, &mk, mp);
-    LuaNode* othern = mainposition(t, &mk);
+    LuaNode* othern;
+#if LUAU_T24_NUMERIC_KEY_HASH
+    if constexpr (UseNumericHash)
+    {
+        if (ttisnumber(gkey(mp)))
+            othern = hashpow2(t, numericKeyHash(gkey(mp)));
+        else
+        {
+            TValue mk;
+            getnodekey(L, &mk, mp);
+            othern = mainposition(t, &mk);
+        }
+    }
+    else
+#endif
+    {
+        TValue mk;
+        getnodekey(L, &mk, mp);
+        othern = mainposition(t, &mk);
+    }
 
     // is colliding node out of its main position?
     if (othern != mp)
@@ -956,7 +998,11 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
 ** position), new key goes to an empty position.
 */
 template<int Tag, bool IsIntKey, typename Key>
-static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValue* key, Key hashkey, int newintkey)
+static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValue* key, Key hashkey, int newintkey
+#if LUAU_T24_NUMERIC_KEY_HASH
+    , uint32_t queryHash = 0, bool hasQueryHash = false
+#endif
+)
 {
     // enforce boundary invariant
     if (IsIntKey && newintkey == t->sizearray + 1)
@@ -970,7 +1016,21 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
         return newkeytagged<Tag, IsIntKey>(L, t, key, hashkey, newintkey);
     }
 
+#if LUAU_T24_NUMERIC_KEY_HASH
+    uint32_t h = 0;
+    LuaNode* mp;
+    if constexpr (Tag == LUA_TNUMBER)
+    {
+        h = hasQueryHash ? queryHash : numericHash(hashkey);
+        mp = hashpow2(t, h);
+    }
+    else if constexpr (Tag == LUA_TVECTOR)
+        mp = hasQueryHash ? hashpow2(t, queryHash) : mainpositiontagged<Tag>(t, hashkey);
+    else
+        mp = mainpositiontagged<Tag>(t, hashkey);
+#else
     LuaNode* mp = mainpositiontagged<Tag>(t, hashkey);
+#endif
 
     if (!ttisnil(gval(mp)) || mp == dummynode)
     {
@@ -988,10 +1048,17 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
             return newkeytagged<Tag, IsIntKey>(L, t, key, hashkey, newintkey);
         }
 
-        mp = newcollidingkey(L, t, mp, n);
+        // A nonnumeric incoming key uses the original collision path. Even
+        // if the displaced key is numeric, recomputing its hash is correct;
+        // this keeps numeric-cache checks out of the string-heavy path.
+        mp = newcollidingkey<Tag == LUA_TNUMBER>(L, t, mp, n);
     }
 
     setnodekey(L, mp, key);
+#if LUAU_T24_NUMERIC_KEY_HASH
+    if constexpr (Tag == LUA_TNUMBER)
+        setNumericKeyHash(gkey(mp), h);
+#endif
 
     if (Tag >= LUA_TSTRING || Tag == LUA_TGCO)
         luaC_barriert(L, t, key);
@@ -1001,7 +1068,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 }
 
 // for the table rehash path, we cannot trigger nested reshashing
-static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool checkarraypart)
+static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool checkarraypart, const TKey* oldkey)
 {
     if (checkarraypart && ttisnumber(key))
     {
@@ -1012,12 +1079,29 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
             return &t->array[k - 1];
     }
 
+#if LUAU_T24_NUMERIC_KEY_HASH
+    bool numeric = ttisnumber(key);
+    uint32_t h = numeric ? (oldkey ? numericKeyHash(oldkey) : numericHash(nvalue(key))) : 0;
+    LuaNode* mp = numeric ? hashpow2(t, h) : mainposition(t, key);
+#else
+    (void)oldkey;
     LuaNode* mp = mainposition(t, key);
+#endif
 
     if (!ttisnil(gval(mp)) || mp == dummynode)
-        mp = newcollidingkey(L, t, mp, getfreepos(t));
+    {
+#if LUAU_T24_NUMERIC_KEY_HASH
+        mp = numeric ? newcollidingkey<true>(L, t, mp, getfreepos(t)) : newcollidingkey<false>(L, t, mp, getfreepos(t));
+#else
+        mp = newcollidingkey<false>(L, t, mp, getfreepos(t));
+#endif
+    }
 
     setnodekey(L, mp, key);
+#if LUAU_T24_NUMERIC_KEY_HASH
+    if (numeric)
+        setNumericKeyHash(gkey(mp), h);
+#endif
     luaC_barriert(L, t, key);
     LUAU_ASSERT(ttisnil(gval(mp)));
     return gval(mp);
@@ -1147,8 +1231,91 @@ const TValue* luaH_get(LuaTable* t, const TValue* key)
     }
 }
 
+#if LUAU_T24_NUMERIC_KEY_HASH
+// A numeric primitive assignment can carry its hash from lookup to insertion.
+// Array values do not need a hash and are returned without computing one.
+const TValue* luaH_getnumberwithhash(LuaTable* t, const TValue* key, uint32_t* hash)
+{
+    LUAU_ASSERT(ttisnumber(key));
+    double n = nvalue(key);
+    int k;
+    luai_num2int(k, n);
+    if (luai_numeq(cast_num(k), n) && unsigned(k) - 1 < unsigned(t->sizearray))
+        return &t->array[k - 1];
+
+    *hash = numericHash(n);
+    LuaNode* node = hashpow2(t, *hash);
+    for (;;)
+    {
+        if (ttisnumber(gkey(node)) && luai_numeq(nvalue(gkey(node)), n))
+            return gval(node);
+        if (gnext(node) == 0)
+            return luaO_nilobject;
+        node += gnext(node);
+    }
+}
+
+TValue* luaH_newnumberwithhash(lua_State* L, LuaTable* t, const TValue* key, uint32_t hash)
+{
+    LUAU_ASSERT(ttisnumber(key));
+    double n = nvalue(key);
+    if (luai_numisnan(n))
+        luaG_runerror(L, "table index is NaN");
+    int k;
+    luai_num2int(k, n);
+    if (luai_numeq(cast_num(k), n))
+        return newkeytagged<LUA_TNUMBER, true>(L, t, key, n, k, hash, true);
+    return newkeytagged<LUA_TNUMBER, false>(L, t, key, n, -1, hash, true);
+}
+// Vector hashes are transient: no key lane is spare for a vec4 payload.
+// The caller may use this hash only for the same callback-free primitive miss.
+const TValue* luaH_getvectorwithhash(LuaTable* t, const TValue* key, uint32_t* hash)
+{
+    LUAU_ASSERT(ttisvector(key));
+    const LUA_VECTOR_TYPE* v = vvalue(key);
+    *hash = vectorHash(v);
+    LuaNode* node = hashpow2(t, *hash);
+    for (;;)
+    {
+        if (ttisvector(gkey(node)) && luai_veceq(vvalue(gkey(node)), v))
+            return gval(node);
+        if (gnext(node) == 0)
+            return luaO_nilobject;
+        node += gnext(node);
+    }
+}
+
+TValue* luaH_newvectorwithhash(lua_State* L, LuaTable* t, const TValue* key, uint32_t hash)
+{
+    LUAU_ASSERT(ttisvector(key));
+    const LUA_VECTOR_TYPE* v = vvalue(key);
+    if (luai_vecisnan(v))
+        luaG_runerror(L, "table index contains NaN");
+    return newkeytagged<LUA_TVECTOR, false>(L, t, key, v, -1, hash, true);
+}
+
+#endif
+
 TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key)
 {
+#if LUAU_T24_NUMERIC_KEY_HASH
+    if (ttisnumber(key))
+    {
+        uint32_t hash = 0;
+        const TValue* p = luaH_getnumberwithhash(t, key, &hash);
+        invalidateTMcache(t);
+        return p != luaO_nilobject ? cast_to(TValue*, p) : luaH_newnumberwithhash(L, t, key, hash);
+    }
+#endif
+#if LUAU_T24_NUMERIC_KEY_HASH
+    if (ttisvector(key))
+    {
+        uint32_t hash = 0;
+        const TValue* p = luaH_getvectorwithhash(t, key, &hash);
+        invalidateTMcache(t);
+        return p != luaO_nilobject ? cast_to(TValue*, p) : luaH_newvectorwithhash(L, t, key, hash);
+    }
+#endif
     const TValue* p = luaH_get(t, key);
     invalidateTMcache(t);
     if (p != luaO_nilobject)
@@ -1368,6 +1535,7 @@ void luaH_clear(LuaTable* tt)
     // back to empty -> no tag methods present
     tt->tmcache = cast_byte(~0);
 }
+
 
 void luaH_setreadonly(lua_State* L, LuaTable* t, bool readonly)
 {
