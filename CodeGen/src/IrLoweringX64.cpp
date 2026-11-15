@@ -2608,6 +2608,14 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         ScopedRegX64 tmp{regs, SizeX64::qword};
 
+#if defined(LUAU_T24_NATIVE_SLOT_COMPARE_RESEARCH)
+        // A mismatching payload already rejects the slot. Check it before
+        // decoding the packed tag, but still require a live string below:
+        // arbitrary non-string key bits can equal an interned string address.
+        build.mov(tmp.reg, luauConstantValue(vmConstOp(OP_B(inst))));
+        build.cmp(tmp.reg, luauNodeKeyValue(regOp(OP_A(inst))));
+        build.jcc(ConditionX64::NotEqual, mismatch);
+#endif
 
         // Check if node key tag is a string
         build.mov(dwordReg(tmp.reg), luauNodeKeyTagOperand(regOp(OP_A(inst))));
@@ -2615,10 +2623,12 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(dwordReg(tmp.reg), LUA_TSTRING);
         build.jcc(ConditionX64::NotEqual, mismatch);
 
+#if !defined(LUAU_T24_NATIVE_SLOT_COMPARE_RESEARCH)
         // Check that node key value matches the expected one
         build.mov(tmp.reg, luauConstantValue(vmConstOp(OP_B(inst))));
         build.cmp(tmp.reg, luauNodeKeyValue(regOp(OP_A(inst))));
         build.jcc(ConditionX64::NotEqual, mismatch);
+#endif
 
         // Check that node value is not nil
         build.cmp(dword[regOp(OP_A(inst)) + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
