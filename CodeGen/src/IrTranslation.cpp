@@ -713,20 +713,119 @@ void translateInstJumpxEqSShortcut(IrBuilder& build, const Instruction* pc, int 
         build.beginBlock(next);
 }
 
-static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fallback, int ra, IrOp opb, IrOp opc, TMS tm, int pcpos)
+#if (defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH) || defined(LUAU_T24_VECTOR_SCALAR_GUARD_RESEARCH)) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+static IrCmd vectorArithmeticCommand(TMS tm)
+{
+    CODEGEN_ASSERT(tm == TM_ADD || tm == TM_SUB || tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV);
+    switch (tm)
+    {
+    case TM_ADD:
+        return IrCmd::ADD_VEC;
+    case TM_SUB:
+        return IrCmd::SUB_VEC;
+    case TM_MUL:
+        return IrCmd::MUL_VEC;
+    case TM_DIV:
+        return IrCmd::DIV_VEC;
+    default:
+        return IrCmd::IDIV_VEC;
+    }
+}
+
+// Every successful native alternative leaves the fallback stream immediately.
+static void emitVectorArithmeticAndJump(IrBuilder& build, int ra, IrOp b, IrOp c, TMS tm, IrOp next)
+{
+    IrOp result = build.inst(vectorArithmeticCommand(tm), b, c);
+    build.inst(IrCmd::STORE_VEC, build.vmReg(ra), result);
+    build.inst(IrCmd::JUMP, next);
+}
+
+#if defined(LUAU_T24_VECTOR_SCALAR_GUARD_RESEARCH)
+static IrOp splatVectorScalar(IrBuilder& build, IrOp operand)
+{
+    // VM arithmetic converts the double scalar to float before each lane's
+    // operation. Retain that conversion, including signed zero and infinities.
+    return build.inst(IrCmd::FLOAT_TO_VEC, build.inst(IrCmd::NUM_TO_FLOAT, loadDoubleOrConstant(build, operand)));
+}
+#endif
+#endif
+
+static void translateBinaryNumericFallbackIfRequired(
+    IrBuilder& build,
+    IrOp fallback,
+    int ra,
+    IrOp opb,
+    IrOp opc,
+    TMS tm,
+    int pcpos,
+    [[maybe_unused]] bool vectorPairChecked = false
+)
 {
     if (fallback.kind != IrOpKind::None)
     {
         IrOp next = build.blockAtInst(pcpos + 1);
         FallbackStreamScope scope(build, fallback, next);
 
-#if defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
-        // Keep the existing numeric fast path unchanged. Untyped vector pairs
-        // used to fail its number checks and always call DO_ARITH, even when
-        // their runtime tags permit the same packed operation as typed vectors.
-        // Guard both authoritative tags before reading either vector payload;
-        // every other combination retains coercion/metamethod/error handling.
-        if (opb.kind == IrOpKind::VmReg && opc.kind == IrOpKind::VmReg &&
+#if (defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH) || defined(LUAU_T24_VECTOR_SCALAR_GUARD_RESEARCH)) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        bool pairAllowed = false;
+#if defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH)
+        pairAllowed = true;
+#endif
+
+#if defined(LUAU_T24_VECTOR_SCALAR_GUARD_RESEARCH)
+        const bool scalarAllowed = tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV;
+        if (scalarAllowed && opb.kind == IrOpKind::VmReg && opc.kind == IrOpKind::VmReg)
+        {
+            IrOp generic = build.fallbackBlock(pcpos);
+            IrOp numberVector = build.fallbackBlock(pcpos);
+            build.loadAndCheckTag(opb, LUA_TVECTOR, numberVector);
+
+            // B is vector. Keep the existing vector-pair positive path, then
+            // try a numeric C without repeating B's authoritative tag check.
+            if (pairAllowed)
+            {
+                IrOp vectorNumber = build.fallbackBlock(pcpos);
+                build.loadAndCheckTag(opc, LUA_TVECTOR, vectorNumber);
+                IrOp vb = build.inst(IrCmd::LOAD_VEC, opb);
+                IrOp vc = opb == opc ? vb : build.inst(IrCmd::LOAD_VEC, opc);
+                emitVectorArithmeticAndJump(build, ra, vb, vc, tm, next);
+                build.beginBlock(vectorNumber);
+            }
+
+            build.loadAndCheckTag(opc, LUA_TNUMBER, generic);
+            IrOp vb = build.inst(IrCmd::LOAD_VEC, opb);
+            IrOp vc = splatVectorScalar(build, opc);
+            emitVectorArithmeticAndJump(build, ra, vb, vc, tm, next);
+
+            // The left-vector guard failed. Numeric B and vector C are the
+            // only remaining native combination; strings and metamethods
+            // retain the unchanged generic operation and its error ordering.
+            build.beginBlock(numberVector);
+            build.loadAndCheckTag(opb, LUA_TNUMBER, generic);
+            build.loadAndCheckTag(opc, LUA_TVECTOR, generic);
+            vb = splatVectorScalar(build, opb);
+            vc = build.inst(IrCmd::LOAD_VEC, opc);
+            emitVectorArithmeticAndJump(build, ra, vb, vc, tm, next);
+            build.beginBlock(generic);
+        }
+        else if (scalarAllowed &&
+                 ((opb.kind == IrOpKind::VmConst && opc.kind == IrOpKind::VmReg) ||
+                  (opb.kind == IrOpKind::VmReg && opc.kind == IrOpKind::VmConst)))
+        {
+            // Binary K/RK constants are verified numeric bytecode constants.
+            IrOp generic = build.fallbackBlock(pcpos);
+            const bool vectorOnLeft = opb.kind == IrOpKind::VmReg;
+            IrOp vector = vectorOnLeft ? opb : opc;
+            IrOp scalar = vectorOnLeft ? opc : opb;
+            build.loadAndCheckTag(vector, LUA_TVECTOR, generic);
+            IrOp vv = build.inst(IrCmd::LOAD_VEC, vector);
+            IrOp vs = splatVectorScalar(build, scalar);
+            emitVectorArithmeticAndJump(build, ra, vectorOnLeft ? vv : vs, vectorOnLeft ? vs : vv, tm, next);
+            build.beginBlock(generic);
+        }
+        else
+#endif
+        if (pairAllowed && opb.kind == IrOpKind::VmReg && opc.kind == IrOpKind::VmReg &&
             (tm == TM_ADD || tm == TM_SUB || tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV))
         {
             IrOp generic = build.fallbackBlock(pcpos);
@@ -736,15 +835,7 @@ static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fall
 
             IrOp vb = build.inst(IrCmd::LOAD_VEC, opb);
             IrOp vc = opb == opc ? vb : build.inst(IrCmd::LOAD_VEC, opc);
-            IrCmd cmd = tm == TM_ADD ? IrCmd::ADD_VEC
-                        : tm == TM_SUB ? IrCmd::SUB_VEC
-                        : tm == TM_MUL ? IrCmd::MUL_VEC
-                        : tm == TM_DIV ? IrCmd::DIV_VEC
-                                       : IrCmd::IDIV_VEC;
-            IrOp result = build.inst(cmd, vb, vc);
-            build.inst(IrCmd::STORE_VEC, build.vmReg(ra), result);
-            build.inst(IrCmd::JUMP, next);
-
+            emitVectorArithmeticAndJump(build, ra, vb, vc, tm, next);
             build.beginBlock(generic);
         }
 #endif
@@ -762,6 +853,7 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
 
     LuauBytecodeType recordedA = FFlag::LuauCodegenRuntimeFeedback ? getRecordedVmRegType(build, bcTypes.a, pcpos, rb) : LBC_TYPE_ANY;
     LuauBytecodeType recordedB = FFlag::LuauCodegenRuntimeFeedback ? getRecordedVmRegType(build, bcTypes.b, pcpos, rc) : LBC_TYPE_ANY;
+
 
     bool vectorA = bcTypes.a == LBC_TYPE_VECTOR || (FFlag::LuauCodegenRuntimeFeedback && recordedA == LBC_TYPE_VECTOR);
     bool vectorB = bcTypes.b == LBC_TYPE_VECTOR || (FFlag::LuauCodegenRuntimeFeedback && recordedB == LBC_TYPE_VECTOR);
@@ -854,7 +946,7 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
         }
 
         if (FFlag::LuauCodegenRuntimeFeedback)
-            translateBinaryNumericFallbackIfRequired(build, fallback, ra, opb, opc, tm, pcpos);
+            translateBinaryNumericFallbackIfRequired(build, fallback, ra, opb, opc, tm, pcpos, true);
 
         return;
     }
@@ -2024,6 +2116,7 @@ void translateInstGetImport(IrBuilder& build, const Instruction* pc, int pcpos)
 
     build.inst(IrCmd::GET_CACHED_IMPORT, build.vmReg(ra), build.vmConst(k), build.constImport(aux), build.constUint(pcpos + 1));
 }
+
 
 void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 {
