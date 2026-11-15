@@ -1294,9 +1294,9 @@ static size_t gcstep(lua_State* L, size_t limit)
                     cost = sweeppageset(L, g->sweepgcopage, cost, limit, -1);
                 else if (g->sweepgcopage_cage)
                     cost = sweeppageset(L, g->sweepgcopage_cage, cost, limit, -1);
-                else if (g->sweeppageset < TAGGED_PAGESET_SIZE && g->taggedpageset[g->sweeppageset].sweeppage)
+                else if (unsigned(g->sweeppageset) < TAGGED_PAGESET_SIZE && g->taggedpageset[g->sweeppageset].sweeppage)
                     cost = sweeppageset(L, g->taggedpageset[g->sweeppageset].sweeppage, cost, limit, g->sweeppageset + TAGGED_PAGESET_BASE);
-                else if (g->sweeppageset < TAGGED_PAGESET_SIZE)
+                else if (unsigned(g->sweeppageset) < TAGGED_PAGESET_SIZE)
                     g->sweeppageset++;
                 else
                     done = true;
