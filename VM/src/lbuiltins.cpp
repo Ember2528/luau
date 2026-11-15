@@ -13,6 +13,18 @@
 
 #include <math.h>
 #include <string.h>
+#if defined(LUAU_T24_UNPACK_RANGE_RESEARCH) || defined(LUAU_T24_VARARG_SELECT_RESEARCH)
+#include <limits.h>
+#endif
+
+#if defined(LUAU_T24_VARARG_SELECT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0 && \
+    (defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || \
+     ((defined(__i386__) || defined(__x86_64__)) && defined(__SSE2__)))
+#include <emmintrin.h>
+#define LUAU_T24_SELECT_SSE2 1
+#else
+#define LUAU_T24_SELECT_SSE2 0
+#endif
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -1035,17 +1047,63 @@ static int luauF_tunpack(lua_State* L, StkId res, TValue* arg0, int nresults, St
     {
         LuaTable* t = hvalue(arg0);
         int n = -1;
+#if defined(LUAU_T24_UNPACK_RANGE_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        int offset = 0;
+#endif
 
         if (nparams == 1)
             n = luaH_getn(t);
+#if defined(LUAU_T24_UNPACK_RANGE_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        else if ((nparams == 2 || nparams == 3) && ttisnumber(args) && (nparams == 2 || ttisnumber(args + 1)))
+        {
+            double first = nvalue(args);
+            double last = nparams == 2 ? double(luaH_getn(t)) : nvalue(args + 1);
+
+            // Match the ordinary integer conversion, but decline values whose
+            // conversion would be out of range (including NaN and infinities).
+            if (first >= 1.0 && first <= double(INT_MAX) && last >= double(INT_MIN) && last <= double(INT_MAX))
+            {
+                int begin = int(first);
+                int end = int(last);
+                if (begin > end)
+                    n = 0;
+                else
+                {
+                    offset = begin - 1;
+                    n = end - offset;
+                }
+            }
+        }
+#else
         else if (nparams == 3 && ttisnumber(args) && ttisnumber(args + 1) && nvalue(args) == 1.0)
             n = int(nvalue(args + 1));
+#endif
 
+#if defined(LUAU_T24_UNPACK_RANGE_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        if (n >= 0 && offset <= t->sizearray && n <= t->sizearray - offset && cast_int(L->stack_last - res) >= n &&
+            n + nparams <= LUAI_MAXCSTACK)
+#else
         if (n >= 0 && n <= t->sizearray && cast_int(L->stack_last - res) >= n && n + nparams <= LUAI_MAXCSTACK)
+#endif
         {
-            TValue* array = t->array;
-            for (int i = 0; i < n; ++i)
-                setobj2s(L, res + i, array + i);
+#if defined(LUAU_T24_UNPACK_RANGE_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+            // offset is zero for empty ranges; avoid arithmetic on null backing.
+            const TValue* array = offset > 0 ? t->array + offset : t->array;
+#else
+            const TValue* array = t->array;
+#endif
+#if defined(LUAU_T24_COPY_BUILTIN_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+            if (n >= 8)
+            {
+                // Array storage and the Lua stack are separate allocations.
+                memcpy(res, array, size_t(n) * sizeof(TValue));
+                for (int i = 0; i < n; ++i)
+                    checkliveness(L->global, res + i);
+            }
+            else
+#endif
+                for (int i = 0; i < n; ++i)
+                    setobj2s(L, res + i, array + i);
             expandstacklimit(L, res + n);
             return n;
         }
