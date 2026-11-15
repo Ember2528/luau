@@ -2782,8 +2782,63 @@ reentry:
 
                     int sizenode = 1 << h->lsizenode;
 
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+                    if (LUAU_UNLIKELY(h->readonly & kFrozenHashIndexMask) && unsigned(index - sizearray) < unsigned(sizenode))
+                    {
+                        index = sizearray + luaH_frozenhashskip(h, index - sizearray);
+                        // A published frozen hint normally lands on the next
+                        // live node; return before initializing the scan end.
+                        // Still check its bounds and value so an inconsistent
+                        // hint retains the ordinary scan's behavior.
+                        if (unsigned(index - sizearray) < unsigned(sizenode))
+                        {
+                            LuaNode* n = &h->node[index - sizearray];
+                            if (!ttisnil(gval(n)))
+                            {
+#if defined(LUAU_T24_DIRECT_TEST_COUNTER)
+                                ++luau_t24_direct_index_hits;
+#endif
+                                setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
+                                getnodekey(L, ra + 3, n);
+                                setobj2s(L, ra + 4, gval(n));
+                                pc += LUAU_INSN_D(insn);
+                                VM_ASSERT_PC(pc);
+                                VM_NEXT();
+                            }
+#if defined(LUAU_T24_DIRECT_TEST_COUNTER)
+                            ++luau_t24_direct_index_nil_fallbacks;
+#endif
+                        }
+                    }
+#endif
 
                     // then we advance index through the hash portion
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+                    if (unsigned(index - sizearray) < unsigned(sizenode))
+                    {
+                        // Scan with a local node pointer. The iterator state
+                        // remains the numeric cursor and we reacquire nodes
+                        // after every callback/interrupt on the next step.
+                        LuaNode* n = h->node + (index - sizearray);
+                        LuaNode* end = h->node + sizenode;
+                        do
+                        {
+                            if (!ttisnil(gval(n)))
+                            {
+                                setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
+                                getnodekey(L, ra + 3, n);
+                                setobj2s(L, ra + 4, gval(n));
+
+                                pc += LUAU_INSN_D(insn);
+                                VM_ASSERT_PC(pc);
+                                VM_NEXT();
+                            }
+
+                            ++index;
+                            ++n;
+                        } while (n != end);
+                    }
+#else
                     while (unsigned(index - sizearray) < unsigned(sizenode))
                     {
                         LuaNode* n = &h->node[index - sizearray];
@@ -2801,6 +2856,7 @@ reentry:
 
                         index++;
                     }
+#endif
 
                     // fallthrough to exit
                     pc++;

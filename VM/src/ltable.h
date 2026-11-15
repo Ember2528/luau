@@ -17,6 +17,20 @@
 #define gnext(n) ((n)->key.next)
 #endif
 
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+// No metadata is read until the owner publishes the frozen hash index.
+inline int luaH_frozenhashskip(const LuaTable* t, int i)
+{
+    unsigned size = 1u << t->lsizenode;
+    if (LUAU_UNLIKELY(t->readonly & kFrozenHashIndexMask) && unsigned(i) < size)
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+        return int(luauCompactNodeCache(t->node, size)[i]);
+#else
+        return int(t->node[i].key.iterNext);
+#endif
+    return i;
+}
+#endif
 
 #define gval2slot(t, v) int(cast_to(LuaNode*, static_cast<const TValue*>(v)) - t->node)
 
@@ -24,7 +38,12 @@
 // cache marker can be stored. Existing marker-clear nodes remain safe misses.
 inline void invalidateFrozenHashIndex(LuaTable* t)
 {
+#if LUAU_T24_BALANCED_VECTOR_CACHE_ACTIVE || (LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE && LUAU_T24_FROZEN_HASH_SKIP_ACTIVE)
+    if (LUAU_UNLIKELY(t->readonly & kFrozenHashIndexMask))
+        t->readonly &= uint8_t(~kFrozenHashIndexMask);
+#else
     (void)t;
+#endif
 }
 
 // reset cache of absent metamethods, cache is updated in luaT_gettm

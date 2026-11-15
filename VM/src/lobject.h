@@ -658,7 +658,22 @@ typedef struct TKey
 #endif
 } TKey;
 
+#if defined(LUAU_T24_COMPACT_FROZEN_HASH_SKIP_RESEARCH) && (!defined(LUAU_T24_PACKED_NODE) || !defined(LUAU_T24_COMPACT_VECTOR_CACHE_RESEARCH))
+#error "Compact frozen index requires the compact cache plane"
+#endif
+#if (defined(LUAU_T24_FROZEN_HASH_SKIP) || defined(LUAU_T24_COMPACT_FROZEN_HASH_SKIP_RESEARCH)) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+#define LUAU_T24_FROZEN_HASH_SKIP_ACTIVE 1
+// LuaTable::readonly publishes position-owned frozen hash indices with this bit.
+constexpr unsigned kFrozenHashIndexBit = 2;
+constexpr unsigned kFrozenHashIndexMask = 1u << kFrozenHashIndexBit;
+#if defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_FROZEN_HASH_SKIP_RESEARCH)
+static_assert(sizeof(TKey) == 16, "unexpected compact frozen key layout");
+#else
+static_assert(sizeof(TKey) == 24 && offsetof(TKey, iterNext) == 20, "unexpected TKey layout");
+#endif
+#else
 #define LUAU_T24_FROZEN_HASH_SKIP_ACTIVE 0
+#endif
 
 #if LUAU_T24_NUMERIC_KEY_HASH
 #if defined(LUAU_T24_PACKED_NODE)

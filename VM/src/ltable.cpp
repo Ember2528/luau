@@ -522,6 +522,12 @@ int luaH_next(lua_State* L, LuaTable* t, StkId key)
         }
     }
     i -= t->sizearray;
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+    // There are no callbacks inside the node scan, so occupancy cannot change
+    // between this one jump and the subsequent plain scan.
+    if (LUAU_UNLIKELY(t->readonly & kFrozenHashIndexMask))
+        i = luaH_frozenhashskip(t, i);
+#endif
     for (; i < sizenode(t); i++)
     { // then hash part
         if (!ttisnil(gval(gnode(t, i))))
@@ -716,6 +722,9 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         {
             LuaNode* n = gnode(t, i);
             gnext(n) = 0;
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && !defined(LUAU_T24_PACKED_NODE)
+            n->key.iterNext = 0;
+#endif
             setnilvalue(gkey(n));
             setnilvalue(gval(n));
         }
@@ -808,6 +817,9 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         {
             LuaNode* n = &newnode[i];
             gnext(n) = 0;
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && !defined(LUAU_T24_PACKED_NODE)
+            n->key.iterNext = 0;
+#endif
             setnilvalue(gkey(n));
             setnilvalue(gval(n));
         }
@@ -1690,6 +1702,53 @@ void luaH_clear(LuaTable* tt)
     tt->tmcache = cast_byte(~0);
 }
 
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+static void prepareFrozenHashSkip(lua_State* L, LuaTable* t)
+{
+    // Weak tables can change through GC, and the registry has internal writes.
+    if (!t->readonly || t->metatable || (ttistable(registry(L)) && hvalue(registry(L)) == t))
+        return;
+    int size = sizenode(t);
+    if (size < 64)
+        return;
+    // Sampling only decides whether to attempt the index. A miss simply
+    // leaves iteration on the normal scan; it never changes table contents.
+    int sampledLive = 0;
+    for (int quarter = 0; quarter < 4; ++quarter)
+        for (int j = 0; j < 4; ++j)
+            sampledLive += !ttisnil(gval(gnode(t, quarter * (size / 4) + j)));
+    if (sampledLive > 4)
+        return;
+
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+    // Do not destroy key-owned hashes if admission is rejected after sampling.
+    // A qualifying table is scanned twice; a dense table aborts the first scan
+    // immediately when its live count exceeds the maximum admitted population.
+    int compactLive = 0;
+    for (int i = 0; i < size; ++i)
+        if (!ttisnil(gval(gnode(t, i))) && ++compactLive > size / 4)
+            return;
+#endif
+    int live = 0;
+    unsigned next = unsigned(size);
+    for (int i = size - 1; i >= 0; --i)
+    {
+        if (!ttisnil(gval(gnode(t, i))))
+        {
+            next = unsigned(i);
+            ++live;
+        }
+#if LUAU_T24_COMPACT_VECTOR_CACHE_ACTIVE
+        // Position-owned while published; indices cannot set the hash marker.
+        luauCompactNodeCache(t->node, size)[i] = next;
+#else
+        t->node[i].key.iterNext = next;
+#endif
+    }
+    if (live <= size / 4)
+        t->readonly |= kFrozenHashIndexMask;
+}
+#endif
 
 void luaH_setreadonly(lua_State* L, LuaTable* t, bool readonly)
 {
@@ -1741,6 +1800,9 @@ void luaH_setreadonly(lua_State* L, LuaTable* t, bool readonly)
                 luaM_freearray(L, oldarray, t->sizearray, TValue, t->memcat);
             }
         }
+#if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
+        prepareFrozenHashSkip(L, t);
+#endif
     }
     else
     {
