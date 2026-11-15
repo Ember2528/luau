@@ -59,4 +59,18 @@ local function makeDoubler()
 end
 assert(makeDoubler()(21) == 42)
 
+-- Lazily built children share field constants while tables have different slot hints.
+local function makeReader()
+  return function(t) return t.sharedField end
+end
+local first, second = {}, {}
+for i = 1, 128 do first["first" .. i] = i; second["second" .. i] = -i end
+first.sharedField, second.sharedField = 17, 23
+local reader = makeReader()
+assert(reader(first) == 17 and reader(second) == 23 and reader(first) == 17)
+first.sharedField = nil
+setmetatable(first, {__index = function() return 31 end})
+collectgarbage()
+assert(reader(first) == 31 and reader(second) == 23)
+
 return 'OK'

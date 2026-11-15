@@ -813,6 +813,15 @@ static void loadProto(
         }
     }
 
+#if LUAU_T24_STRING_CONSTANT_SLOT
+    // This common per-Proto path also builds lazy child functions. Strings,
+    // including string-valued imports, own a validated slot hint in extra[1];
+    // vector constants use that storage for their components and must be left intact.
+    for (int j = 0; j < p->sizek; ++j)
+        if (ttisstring(&p->k[j]))
+            p->k[j].extra[1] = 0;
+#endif
+
     for (Instruction* instruction = p->code; instruction < p->code + p->sizecode;)
     {
         int targetOp = -1;

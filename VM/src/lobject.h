@@ -50,6 +50,12 @@ typedef struct lua_TValue
     int tt;
 } TValue;
 
+#if defined(LUAU_T24_STRING_CONSTANT_SLOT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+#define LUAU_T24_STRING_CONSTANT_SLOT 1
+#else
+#define LUAU_T24_STRING_CONSTANT_SLOT 0
+#endif
+
 #if LUA_VECTOR_SIZE == 4
 #define condvector4(vec4expr, vec3expr) vec4expr
 #else

@@ -1,5 +1,8 @@
 # This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 if(EXT_PLATFORM_STRING)
+    if(LUAU_T24_CANDIDATE)
+        message(FATAL_ERROR "The T24 profile is not configured by the external platform build")
+    endif()
     include(EXTLuau.cmake)
     return()
 endif()
@@ -17,6 +20,11 @@ option(LUAU_BUILD_SHARED "Build as a shared library" OFF)
 # Compile time options for Luau features
 option(LUAU_VECTOR_DOUBLE "Use 64-bit doubles for vector components" OFF)
 option(LUAU_VECTOR_FOUR_WIDE "Enable 4-wide mode for vectors, adding a 'w' component" OFF)
+option(LUAU_T24_CANDIDATE "Enable the compact four-wide runtime profile" OFF)
+
+if(LUAU_T24_CANDIDATE AND (NOT LUAU_VECTOR_FOUR_WIDE OR LUAU_VECTOR_DOUBLE))
+    message(FATAL_ERROR "LUAU_T24_CANDIDATE requires four-wide float vectors")
+endif()
 
 if(LUAU_BUILD_SHARED AND NOT LUAU_EXTERN_C)
     message(FATAL_ERROR "LUAU_BUILD_SHARED requires LUAU_EXTERN_C to be ON")
@@ -31,6 +39,10 @@ if(LUAU_STATIC_CRT)
 endif()
 
 project(Luau LANGUAGES CXX C)
+
+if(LUAU_T24_CANDIDATE AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "The compact T24 profile requires 64-bit pointers")
+endif()
 
 if (LUAU_BUILD_SHARED)
     add_library(Luau.Common SHARED)
@@ -94,6 +106,11 @@ include(Sources.cmake)
 
 target_compile_features(Luau.Common PUBLIC cxx_std_17)
 target_include_directories(Luau.Common PUBLIC Common/include)
+
+if(LUAU_T24_CANDIDATE)
+    include(T24Candidate.cmake)
+    target_compile_definitions(Luau.Common PUBLIC ${LUAU_T24_CANDIDATE_DEFINITIONS})
+endif()
 
 target_compile_features(Luau.CLI.lib PUBLIC cxx_std_17)
 target_include_directories(Luau.CLI.lib PUBLIC CLI/include)

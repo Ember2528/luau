@@ -528,7 +528,16 @@ reentry:
                 {
                     LuaTable* h = hvalue(rb);
 
+#if LUAU_T24_STRING_CONSTANT_SLOT
+                    // Keep the existing per-site bytecode hint for small
+                    // tables. Use the constant's full hint only when a slot
+                    // cannot fit in that byte, and always validate the hit.
+                    bool fullHint = h->lsizenode > 8;
+                    unsigned slot = fullHint ? unsigned(kv->extra[1]) & ((1u << h->lsizenode) - 1)
+                                             : LUAU_INSN_C(insn) & h->nodemask8;
+#else
                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
+#endif
                     LuaNode* n = &h->node[slot];
 
                     // fast-path: value is in expected slot
@@ -545,6 +554,10 @@ reentry:
                         if (res != luaO_nilobject)
                         {
                             int cachedslot = gval2slot(h, res);
+#if LUAU_T24_STRING_CONSTANT_SLOT
+                            if (fullHint)
+                                kv->extra[1] = cachedslot;
+#endif
                             // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                             VM_PATCH_C(pc - 2, cachedslot);
                         }
@@ -557,6 +570,12 @@ reentry:
                         // slow-path, may invoke Lua calls via __index metamethod
                         L->cachedslot = slot;
                         VM_PROTECT(luaV_gettable(L, rb, kv, ra));
+#if LUAU_T24_STRING_CONSTANT_SLOT
+                        // fullHint was captured before a callback could resize
+                        // the table or relocate the stack.
+                        if (fullHint)
+                            kv->extra[1] = L->cachedslot;
+#endif
                         // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                         VM_PATCH_C(pc - 2, L->cachedslot);
                         VM_NEXT();

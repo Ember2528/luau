@@ -1,0 +1,7 @@
+# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+
+# Interpreter definitions are shared by the VM, compiler and private-header consumers.
+set(LUAU_T24_CANDIDATE_DEFINITIONS
+    LUA_VECTOR_SIZE=4
+    LUAU_T24_STRING_CONSTANT_SLOT_RESEARCH=1
+)
