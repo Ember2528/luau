@@ -720,6 +720,34 @@ static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fall
         IrOp next = build.blockAtInst(pcpos + 1);
         FallbackStreamScope scope(build, fallback, next);
 
+#if defined(LUAU_T24_VECTOR_ARITH_GUARD_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
+        // Keep the existing numeric fast path unchanged. Untyped vector pairs
+        // used to fail its number checks and always call DO_ARITH, even when
+        // their runtime tags permit the same packed operation as typed vectors.
+        // Guard both authoritative tags before reading either vector payload;
+        // every other combination retains coercion/metamethod/error handling.
+        if (opb.kind == IrOpKind::VmReg && opc.kind == IrOpKind::VmReg &&
+            (tm == TM_ADD || tm == TM_SUB || tm == TM_MUL || tm == TM_DIV || tm == TM_IDIV))
+        {
+            IrOp generic = build.fallbackBlock(pcpos);
+            build.loadAndCheckTag(opb, LUA_TVECTOR, generic);
+            if (opc != opb)
+                build.loadAndCheckTag(opc, LUA_TVECTOR, generic);
+
+            IrOp vb = build.inst(IrCmd::LOAD_VEC, opb);
+            IrOp vc = opb == opc ? vb : build.inst(IrCmd::LOAD_VEC, opc);
+            IrCmd cmd = tm == TM_ADD ? IrCmd::ADD_VEC
+                        : tm == TM_SUB ? IrCmd::SUB_VEC
+                        : tm == TM_MUL ? IrCmd::MUL_VEC
+                        : tm == TM_DIV ? IrCmd::DIV_VEC
+                                       : IrCmd::IDIV_VEC;
+            IrOp result = build.inst(cmd, vb, vc);
+            build.inst(IrCmd::STORE_VEC, build.vmReg(ra), result);
+            build.inst(IrCmd::JUMP, next);
+
+            build.beginBlock(generic);
+        }
+#endif
         build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
         build.inst(IrCmd::DO_ARITH, build.vmReg(ra), opb, opc, build.constInt(tm));
         build.inst(IrCmd::JUMP, next);
