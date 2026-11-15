@@ -143,7 +143,7 @@ jobs:
       run: cmake --build build --target Luau.Repl.CLI Luau.UnitTest Luau.Conformance -j2
     - name: test
       run: |
-        build/Luau.UnitTest --test-suite=Compiler,BytecodeCompiler,BytecodeInliner,CodeAllocation,IrRegAllocX64,IrCallWrapperX64,x64Assembly,A64Assembly,Optimization,ConstantPropagation,DSE
+        build/Luau.UnitTest --test-suite=Compiler,BytecodeCompiler,BytecodeInliner,CodeAllocation,IrRegAllocX64,IrCallWrapperX64,IrAssembly,x64Assembly,A64Assembly,Optimization,ConstantPropagation,DSE
         build/Luau.Conformance --test-suite=Conformance,WideTValueIrGuards
         build/Luau.Conformance --test-suite=Conformance,WideTValueIrGuards --codegen
 

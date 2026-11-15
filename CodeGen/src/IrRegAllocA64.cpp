@@ -103,20 +103,6 @@ static AddressA64 getReloadAddress(ValueRestoreLocation location)
     return AddressA64(xzr); // dummy
 }
 
-static void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src, size_t offset)
-{
-    CODEGEN_ASSERT(dst != src);
-
-    if (offset <= AssemblyBuilderA64::kMaxImmediate)
-    {
-        build.add(dst, src, uint16_t(offset));
-    }
-    else
-    {
-        build.mov(dst, int(offset));
-        build.add(dst, dst, src);
-    }
-}
 
 IrRegAllocA64::IrRegAllocA64(
     LogBuilder* logger,

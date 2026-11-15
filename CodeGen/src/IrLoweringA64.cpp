@@ -176,21 +176,6 @@ inline ConditionA64 getConditionInt64(IrCondition cond)
     }
 }
 
-static void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src, size_t offset)
-{
-    CODEGEN_ASSERT(dst != src);
-    CODEGEN_ASSERT(offset <= INT_MAX);
-
-    if (offset <= AssemblyBuilderA64::kMaxImmediate)
-    {
-        build.add(dst, src, uint16_t(offset));
-    }
-    else
-    {
-        build.mov(dst, int(offset));
-        build.add(dst, dst, src);
-    }
-}
 
 static void emitAbort(AssemblyBuilderA64& build, Label& abort)
 {
