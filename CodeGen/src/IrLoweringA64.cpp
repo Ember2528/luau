@@ -7,6 +7,7 @@
 #include "Luau/LoweringStats.h"
 
 #include "EmitCommonA64.h"
+#include "CodeGenUtils.h"
 #include "NativeState.h"
 
 #include "lstate.h"
@@ -3425,6 +3426,61 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // register layout: ra + 1 = table, ra + 2 = internal index, ra + 3 .. ra + aux = iteration variables
         regs.spill(index);
 
+#if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
+    (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
+        // x1 is the freshly loaded table and w2 the numeric cursor. A live
+        // current node can be returned directly; nil and out-of-range nodes
+        // continue to the helper. No iterator/result writes happen before all
+        // guards have passed.
+        const bool denseNodeLayoutSupported = isDenseIteratorKeyLayoutSupported();
+        auto emitLiveNodeFastPath = [&]() {
+            Label nodeFallback;
+#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH)
+            // The published index makes the ordinary helper efficient for gaps.
+            build.ldrb(w4, mem(x1, offsetof(LuaTable, readonly)));
+            build.tbnz(w4, kFrozenHashIndexBit, nodeFallback);
+#endif
+            build.ldr(w4, mem(x1, offsetof(LuaTable, sizearray)));
+            build.cmp(w2, w4);
+            build.b(ConditionA64::UnsignedLess, nodeFallback);
+            build.sub(w4, w2, w4);
+            build.ldrb(w5, mem(x1, offsetof(LuaTable, lsizenode)));
+            build.mov(w6, 1);
+            build.lsl(w6, w6, w5);
+            build.cmp(w4, w6);
+            build.b(ConditionA64::UnsignedGreaterEqual, nodeFallback);
+            build.ldr(x5, mem(x1, offsetof(LuaTable, node)));
+            if constexpr (sizeof(LuaNode) == 40)
+            {
+                build.add(x4, x4, x4, 2); // cursor*5
+                build.add(x5, x5, x4, 3); // *8
+            }
+            else
+            {
+                build.add(x4, x4, x4, 1);
+                build.add(x5, x5, x4, 4);
+            }
+            build.ldr(w6, mem(x5, offsetof(LuaNode, val) + offsetof(TValue, tt)));
+            build.cbz(w6, nodeFallback);
+
+            // getnodekey copies the complete 16-byte payload, including all
+            // four vector lanes, then decodes the tag from the key bitfield.
+            build.add(x4, x5, uint16_t(offsetof(LuaNode, key) + offsetof(TKey, value)));
+            build.ldr(q0, mem(x4, 0));
+            build.str(q0, tempAddr(OP_A(inst), 3 * sizeof(TValue), x3, 16));
+            build.ldr(w4, mem(x5, LUAU_NODE_KEY_TAG_NEXT_OFFSET));
+            build.and_(w4, w4, unsigned(kTKeyTagMask));
+            build.str(w4, tempAddr(OP_A(inst), 3 * sizeof(TValue) + offsetof(TValue, tt), x3));
+            build.ldr(q0, mem(x5, offsetof(LuaNode, val)));
+            build.str(q0, tempAddr(OP_A(inst), 4 * sizeof(TValue), x3, 16));
+            build.str(w6, tempAddr(OP_A(inst), 4 * sizeof(TValue) + offsetof(TValue, tt), x3));
+            build.add(w2, w2, uint16_t(1));
+            build.str(w2, tempAddr(OP_A(inst), 2 * sizeof(TValue) + offsetof(TValue, value.p), x3));
+            build.b(labelOp(OP_C(inst)));
+            build.setLabel(nodeFallback);
+        };
+#endif
+
         if (FFlag::LuauCodegenA64ForgLoopArray)
         {
             int ra = vmRegOp(OP_A(inst));
@@ -3493,6 +3549,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
             build.setLabel(skipArray);
             // the array is exhausted, so the node part is what is left
+#if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
+    (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
+            if (denseNodeLayoutSupported)
+                emitLiveNodeFastPath();
+#endif
             build.mov(x0, rState);
             emitAddOffset(build, x3, rBase, ra * sizeof(TValue));
             build.ldr(x5, mem(rNativeContext, offsetof(NativeContext, forgLoopNodeIter)));
@@ -3510,9 +3571,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
                     build.str(wzr, tempAddr(OP_A(inst), (3 + i) * sizeof(TValue) + offsetof(TValue, tt), x3));
             }
             // we use full iter fallback for now; in the future it could be worthwhile to accelerate array iteration here
-            build.mov(x0, rState);
             build.ldr(x1, tempAddr(OP_A(inst), sizeof(TValue) + offsetof(TValue, value.gc), x3));
             build.ldr(w2, tempAddr(OP_A(inst), 2 * sizeof(TValue) + offsetof(TValue, value.p), x3));
+#if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
+    (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
+            if (denseNodeLayoutSupported)
+                emitLiveNodeFastPath();
+#endif
+            build.mov(x0, rState);
             emitAddOffset(build, x3, rBase, vmRegOp(OP_A(inst)) * sizeof(TValue));
             build.ldr(x4, mem(rNativeContext, offsetof(NativeContext, forgLoopTableIter)));
             build.blr(x4);

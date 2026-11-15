@@ -8,6 +8,7 @@
 #include "Luau/RegisterX64.h"
 
 #include "EmitCommonX64.h"
+#include "CodeGenUtils.h"
 #include "NativeState.h"
 
 #include "lstate.h"
@@ -421,6 +422,53 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
 
     regs.takeReg(table, kInvalidInstIdx); // table/index are preloaded above, have to take ownership so the wrapper can free them
     regs.takeReg(index, kInvalidInstIdx);
+
+#if (LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)) || \
+    (defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH))
+    // A live current node can be returned directly. Complete every guard
+    // before touching the iterator/result slots; nil and out-of-range nodes
+    // retain the frozen-aware helper path.
+    if (isDenseIteratorKeyLayoutSupported())
+    {
+        ScopedRegX64 shift{regs, regs.takeReg(rcx, kInvalidInstIdx)};
+        ScopedRegX64 node{regs, SizeX64::qword};
+        ScopedRegX64 offset{regs, SizeX64::qword};
+        Label nodeFallback;
+
+#if defined(LUAU_T24_DENSE_FROZEN_BYPASS_RESEARCH)
+        // Published sparse indices already let the helper jump over gaps.
+        build.test(byte[table + offsetof(LuaTable, readonly)], kFrozenHashIndexMask);
+        build.jcc(ConditionX64::NotZero, nodeFallback);
+#endif
+        build.mov(dwordReg(offset.reg), dwordReg(index));
+        build.sub(dwordReg(offset.reg), dword[table + offsetof(LuaTable, sizearray)]);
+        build.movzx(dwordReg(shift.reg), byte[table + offsetof(LuaTable, lsizenode)]);
+        build.mov(dwordReg(node.reg), 1);
+        build.shl(dwordReg(node.reg), byteReg(shift.reg));
+        build.cmp(dwordReg(offset.reg), dwordReg(node.reg));
+        build.jcc(ConditionX64::NotBelow, nodeFallback);
+
+        build.mov(node.reg, qword[table + offsetof(LuaTable, node)]);
+        scaleLuaNodeIndex(build, offset.reg);
+        build.add(node.reg, offset.reg);
+        build.cmp(dword[node.reg + offsetof(LuaNode, val) + offsetof(TValue, tt)], LUA_TNIL);
+        build.jcc(ConditionX64::Equal, nodeFallback);
+
+        build.inc(index);
+        build.mov(luauRegValue(ra + 2), index);
+        // getnodekey: copy the full key payload including all vector lanes,
+        // then decode the packed key tag separately from its chain bits.
+        build.vmovups(xmm2, xmmword[node.reg + offsetof(LuaNode, key) + offsetof(TKey, value)]);
+        build.vmovups(luauReg(ra + 3), xmm2);
+        build.mov(dwordReg(shift.reg), luauNodeKeyTagOperand(node.reg));
+        build.and_(dwordReg(shift.reg), kTKeyTagMask);
+        build.mov(luauRegTag(ra + 3), dwordReg(shift.reg));
+        setLuauReg(build, xmm2, ra + 4, xmmword[node.reg + offsetof(LuaNode, val)]);
+        build.jmp(loopRepeat);
+        build.setLabel(nodeFallback);
+    }
+#endif
+
     IrCallWrapperX64 callWrapper(regs, build);
     callWrapper.addArgument(SizeX64::qword, rState);
     callWrapper.addArgument(SizeX64::qword, table);

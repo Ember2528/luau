@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "CodeGenUtils.h"
+#include "EmitCommon.h"
 
 #include "lvm.h"
 
@@ -22,6 +23,7 @@
 LUAU_FASTFLAG(LuauPromoteProto)
 LUAU_FASTFLAG(LuauRuntimeFeedback)
 LUAU_FASTFLAG(LuauCodegenUserdataDirect)
+LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauBalancedDenseIteration, true)
 
 // All external function calls that can cause stack realloc or Lua calls have to be wrapped in VM_PROTECT
 // This makes sure that we save the pc (in case the Lua call needs to generate a backtrace) before the call,
@@ -74,8 +76,71 @@ unsigned nativeStringSlotFallbackCount = 0;
 unsigned nativeSingletonMissCount = 0;
 #endif
 
+bool isDenseIteratorKeyLayoutSupported()
+{
+#if defined(LUAU_T24_PACKED_NODE) && defined(LUAU_T24_COMPACT_DENSE_ITER_RESEARCH)
+    if (!DFFlag::LuauBalancedDenseIteration)
+        return false;
+    static_assert(sizeof(TValue) == 24 && sizeof(TKey) == 16 && sizeof(LuaNode) == 40 &&
+        offsetof(TValue, nodekey) == 20 && offsetof(LuaNode, key) == 24, "unexpected compact iterator layout");
+#if defined(LUAU_T24_DENSE_FORCE_LAYOUT_REJECTION)
+    return false;
+#endif
+    for (unsigned tag = 0; tag <= kTKeyTagMask; ++tag)
+        for (int choice = 0; choice < 3; ++choice)
+        {
+            LuaNode node{};
+            node.val.nodekey.tt = tag;
+            node.val.nodekey.next = choice == 0 ? 0 : choice == 1 ? 1 : -1;
+            unsigned raw = 0;
+            memcpy(&raw, reinterpret_cast<const char*>(&node) + LUAU_NODE_KEY_TAG_NEXT_OFFSET, sizeof(raw));
+            if ((raw & kTKeyTagMask) != tag)
+                return false;
+        }
+    return true;
+#elif LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && defined(LUAU_T24_DENSE_NATIVE_ITER_RESEARCH)
+    if (!DFFlag::LuauBalancedDenseIteration)
+        return false;
+    static_assert(sizeof(TValue) == 24 && sizeof(TKey) == 24 && sizeof(LuaNode) == 48, "dense iterator requires T24 nodes");
+    static_assert(LUA_TNIL == 0, "dense iterator A64 nil check requires a zero tag");
+    static_assert(offsetof(TKey, value) == 0 && offsetof(TKey, extra) == 8 && offsetof(TValue, tt) == 16 &&
+            offsetof(LuaNode, key) == 24 && kOffsetOfTKeyTagNext == 16 && kTKeyTagBits == 4,
+        "dense iterator requires the expected T24 key layout");
+#if defined(LUAU_T24_DENSE_FORCE_LAYOUT_REJECTION)
+    return false; // Test-only witness of the incompatible-layout fallback.
+#endif
+    // Size/offset mismatches fail the assertions above. Bitfield packing is
+    // implementation-defined, so check every tag with zero and nonzero chain
+    // bits at codegen time and fall back to the C++ helper if it differs.
+    for (unsigned tag = 0; tag <= kTKeyTagMask; ++tag)
+    {
+        for (int choice = 0; choice < 3; ++choice)
+        {
+            TKey key{};
+            key.tt = tag;
+            key.next = choice == 0 ? 0 : choice == 1 ? 1 : -1;
+            unsigned raw = 0;
+            memcpy(&raw, reinterpret_cast<const char*>(&key) + kOffsetOfTKeyTagNext, sizeof(raw));
+            if ((raw & kTKeyTagMask) != tag)
+                return false;
+        }
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+#if defined(LUAU_T24_DENSE_NATIVE_ITER_TEST_COUNTERS)
+unsigned denseIteratorTableFallbackCount = 0;
+unsigned denseIteratorNodeFallbackCount = 0;
+#endif
+
 bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 {
+#if defined(LUAU_T24_DENSE_NATIVE_ITER_TEST_COUNTERS)
+    ++denseIteratorTableFallbackCount;
+#endif
     int sizearray = h->sizearray;
 
     // first we advance index through the array portion
@@ -98,7 +163,7 @@ bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
     int sizenode = 1 << h->lsizenode;
 
 #if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
-    if (LUAU_UNLIKELY(h->readonly & 4) && unsigned(index - sizearray) < unsigned(sizenode))
+    if (LUAU_UNLIKELY(h->readonly & kFrozenHashIndexMask) && unsigned(index - sizearray) < unsigned(sizenode))
         index = sizearray + luaH_frozenhashskip(h, index - sizearray);
 #endif
 
@@ -148,11 +213,14 @@ bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 
 bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
 {
+#if defined(LUAU_T24_DENSE_NATIVE_ITER_TEST_COUNTERS)
+    ++denseIteratorNodeFallbackCount;
+#endif
     int sizearray = h->sizearray;
     int sizenode = 1 << h->lsizenode;
 
 #if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE
-    if (LUAU_UNLIKELY(h->readonly & 4) && unsigned(index - sizearray) < unsigned(sizenode))
+    if (LUAU_UNLIKELY(h->readonly & kFrozenHashIndexMask) && unsigned(index - sizearray) < unsigned(sizenode))
         index = sizearray + luaH_frozenhashskip(h, index - sizearray);
 #endif
 

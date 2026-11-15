@@ -8,6 +8,7 @@ namespace Luau
 namespace CodeGen
 {
 
+bool isDenseIteratorKeyLayoutSupported();
 bool forgLoopTableIter(lua_State* L, LuaTable* h, int index, TValue* ra);
 bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra);
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux);
