@@ -5,15 +5,34 @@
 #include "lobject.h"
 
 #define gnode(t, i) (&(t)->node[i])
+#if defined(LUAU_T24_PACKED_NODE)
+#define gkey(n) luauKeyView(n)
+#else
 #define gkey(n) (&(n)->key)
+#endif
 #define gval(n) (&(n)->val)
+#if defined(LUAU_T24_PACKED_NODE)
+#define gnext(n) ((n)->val.nodekey.next)
+#else
 #define gnext(n) ((n)->key.next)
+#endif
 
 
 #define gval2slot(t, v) int(cast_to(LuaNode*, static_cast<const TValue*>(v)) - t->node)
 
+// A private writer must revoke the position-owned index before a key-owned
+// cache marker can be stored. Existing marker-clear nodes remain safe misses.
+inline void invalidateFrozenHashIndex(LuaTable* t)
+{
+    (void)t;
+}
+
 // reset cache of absent metamethods, cache is updated in luaT_gettm
-#define invalidateTMcache(t) t->tmcache = 0
+inline uint8_t invalidateTMcache(LuaTable* t)
+{
+    invalidateFrozenHashIndex(t);
+    return t->tmcache = 0;
+}
 
 LUAI_FUNC const TValue* luaH_getnum(LuaTable* t, int key);
 LUAI_FUNC TValue* luaH_setnum(lua_State* L, LuaTable* t, int key);

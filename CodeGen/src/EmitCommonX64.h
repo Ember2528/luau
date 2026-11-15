@@ -113,7 +113,7 @@ inline OperandX64 luauRegTag(int ri)
 
 inline OperandX64 luauRegExtra(int ri)
 {
-    return dword[rBase + ri * sizeof(TValue) + offsetof(TValue, extra)];
+    return dword[rBase + ri * sizeof(TValue) + LUAU_TVALUE_EXTRA_OFFSET];
 }
 
 inline OperandX64 luauRegValueInt(int ri)

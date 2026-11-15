@@ -13,7 +13,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if defined(LUAU_T24_PACKED_NODE)
+const TValue luaO_nilobject_ = {{NULL}, LUA_TNIL, {LUA_TNIL, 0}};
+#else
 const TValue luaO_nilobject_ = {{NULL}, {0}, LUA_TNIL};
+#endif
 
 int luaO_log2(unsigned int x)
 {
@@ -56,7 +60,7 @@ int luaO_rawequalObj(const TValue* t1, const TValue* t2)
         }
 }
 
-int luaO_rawequalKey(const TKey* t1, const TValue* t2)
+int luaO_rawequalKey(TKeyRef t1, const TValue* t2)
 {
     if (ttype(t1) != ttype(t2))
         return 0;

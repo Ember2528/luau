@@ -239,7 +239,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         if (OP_B(inst).kind == IrOpKind::Constant)
         {
             if (OP_A(inst).kind == IrOpKind::Inst)
-                build.mov(dword[regOp(OP_A(inst)) + offsetof(TValue, extra)], intOp(OP_B(inst)));
+                build.mov(dword[regOp(OP_A(inst)) + LUAU_TVALUE_EXTRA_OFFSET], intOp(OP_B(inst)));
             else
                 build.mov(luauRegExtra(vmRegOp(OP_A(inst))), intOp(OP_B(inst)));
         }

@@ -57,7 +57,7 @@ static void validatetable(global_State* g, LuaTable* h)
         if (!ttisnil(gval(n)))
         {
             TValue k = {};
-            k.tt = gkey(n)->tt;
+            k.tt = ttype(gkey(n));
             k.value = gkey(n)->value;
 
             validateref(g, obj2gco(h), &k);
@@ -389,14 +389,14 @@ static void dumptable(FILE* f, LuaTable* h)
         {
             const LuaNode& n = h->node[i];
 
-            if (!ttisnil(&n.val) && (iscollectable(&n.key) || iscollectable(&n.val)))
+            if (!ttisnil(&n.val) && (iscollectable(gkey(&n)) || iscollectable(&n.val)))
             {
                 if (!first)
                     fputc(',', f);
                 first = false;
 
-                if (iscollectable(&n.key))
-                    dumpref(f, gcvalue(&n.key));
+                if (iscollectable(gkey(&n)))
+                    dumpref(f, gcvalue(gkey(&n)));
                 else
                     fprintf(f, "null");
 
@@ -828,27 +828,27 @@ static void enumtable(EnumContext* ctx, LuaTable* h)
         {
             const LuaNode& n = h->node[i];
 
-            if (!ttisnil(&n.val) && (iscollectable(&n.key) || iscollectable(&n.val)))
+            if (!ttisnil(&n.val) && (iscollectable(gkey(&n)) || iscollectable(&n.val)))
             {
-                if (!weakkey && iscollectable(&n.key))
-                    enumedge(ctx, obj2gco(h), gcvalue(&n.key), "[key]");
+                if (!weakkey && iscollectable(gkey(&n)))
+                    enumedge(ctx, obj2gco(h), gcvalue(gkey(&n)), "[key]");
 
                 if (!weakvalue && iscollectable(&n.val))
                 {
-                    if (ttisstring(&n.key))
+                    if (ttisstring(gkey(&n)))
                     {
-                        enumedge(ctx, obj2gco(h), gcvalue(&n.val), svalue(&n.key));
+                        enumedge(ctx, obj2gco(h), gcvalue(&n.val), svalue(gkey(&n)));
                     }
-                    else if (ttisnumber(&n.key))
+                    else if (ttisnumber(gkey(&n)))
                     {
                         char buf[32];
-                        snprintf(buf, sizeof(buf), "%.14g", nvalue(&n.key));
+                        snprintf(buf, sizeof(buf), "%.14g", nvalue(gkey(&n)));
                         enumedge(ctx, obj2gco(h), gcvalue(&n.val), buf);
                     }
                     else
                     {
                         char buf[32];
-                        snprintf(buf, sizeof(buf), "[%s]", getstr(ctx->L->global->ttname[n.key.tt]));
+                        snprintf(buf, sizeof(buf), "[%s]", getstr(ctx->L->global->ttname[luauNodeKeyType(&n)]));
                         enumedge(ctx, obj2gco(h), gcvalue(&n.val), buf);
                     }
                 }
@@ -914,7 +914,7 @@ static void enumudata(EnumContext* ctx, Udata* u)
             {
                 const LuaNode& n = h->node[i];
 
-                if (ttisstring(&n.key) && ttisstring(&n.val) && strcmp(svalue(&n.key), "__type") == 0)
+                if (ttisstring(gkey(&n)) && ttisstring(&n.val) && strcmp(svalue(gkey(&n)), "__type") == 0)
                 {
                     name = svalue(&n.val);
                     break;

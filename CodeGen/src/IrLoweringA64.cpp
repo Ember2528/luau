@@ -508,7 +508,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::STORE_EXTRA:
     {
-        AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, extra));
+        AddressA64 addr = tempAddr(OP_A(inst), LUAU_TVALUE_EXTRA_OFFSET);
         if (intOp(OP_B(inst)) == 0)
         {
             build.str(wzr, addr);

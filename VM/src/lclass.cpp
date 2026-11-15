@@ -508,7 +508,7 @@ static LuauClassConstructMatch luaR_classmatchesshape(LuauClass* klass, LuaTable
     for (int i = 0; i < sizenode(shape); i++)
     {
         LuaNode* node = gnode(shape, i);
-        const TKey* key = gkey(node);
+        auto key = gkey(node);
         const TValue* val = gval(node);
 
         // no key in shape, field will initialize to nil

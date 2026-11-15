@@ -5,6 +5,10 @@
 #include "lua.h"
 #include "lcommon.h"
 #include "lbytecode.h"
+#include <cstring>
+
+// These profiles use key storage removed by compact nodes. Keep them explicit
+// build errors until their metadata, native layouts, and lifetimes are redesigned.
 
 
 /*
@@ -37,7 +41,17 @@ typedef union
     void* p;
     double n;
     int b;
+#if defined(LUAU_T24_PACKED_NODE)
+    // The complete vector is one real array object, including lanes 2 and 3.
+    float v[4];
+    struct
+    {
+        union { void* p; uint64_t slot; };
+        int extra[2];
+    } light;
+#else
     float v[2]; // v[0], v[1] live here; v[2] lives in TValue::extra
+#endif
 } Value;
 
 /*
@@ -47,8 +61,18 @@ typedef union
 typedef struct lua_TValue
 {
     Value value;
+#if !defined(LUAU_T24_PACKED_NODE)
     int extra[LUA_EXTRA_SIZE];
+#endif
     int tt;
+#if defined(LUAU_T24_PACKED_NODE)
+#if LUA_VECTOR_SIZE != 4 || LUA_VECTOR_DOUBLE != 0
+#error "Experimental compact hash nodes require four inline float vector lanes"
+#endif
+    // Explicit storage, not an overlapping C++ tail-padding subobject. Only
+    // table hash value cells use these bits, for their owning key's metadata.
+    struct { unsigned tt : 4; int next : 28; } nodekey;
+#endif
 } TValue;
 
 #if defined(LUAU_T24_STRING_CONSTANT_SLOT_RESEARCH) && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
@@ -56,6 +80,27 @@ typedef struct lua_TValue
 #else
 #define LUAU_T24_STRING_CONSTANT_SLOT 0
 #endif
+
+#if defined(LUAU_T24_PACKED_NODE)
+struct TKeyView;
+struct TKeyConstView;
+template<typename T> inline int luauValueType(const T* v) { return v->tt; }
+inline int luauValueType(TKeyView k);
+inline int luauValueType(TKeyConstView k);
+inline void luauSetNil(TValue* v) { v->tt = LUA_TNIL; }
+inline void luauSetNil(TKeyView k);
+inline void luauSetKeyType(TKeyView k, int tt);
+#endif
+
+inline void luauCopyValue(TValue* dst, const TValue* src)
+{
+#if defined(LUAU_T24_PACKED_NODE)
+    dst->value = src->value;
+    dst->tt = src->tt;
+#else
+    *dst = *src;
+#endif
+}
 
 #if LUA_VECTOR_SIZE == 4
 #define condvector4(vec4expr, vec3expr) vec4expr
@@ -86,9 +131,34 @@ typedef struct lua_TValue
 #define ttisobject(o) (ttype(o) == LUA_TOBJECT)
 
 // Macros to access values
+#if defined(LUAU_T24_PACKED_NODE)
+#define ttype(o) luauValueType(o)
+#else
 #define ttype(o) ((o)->tt)
+#endif
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
+#if defined(LUAU_T24_PACKED_NODE)
+#define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.light.p)
+#define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->value.light.extra[0])
+#define LUAU_TVALUE_EXTRA_OFFSET (offsetof(TValue, value) + offsetof(Value, light.extra))
+#else
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
+#define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->extra[0])
+#define LUAU_TVALUE_EXTRA_OFFSET offsetof(TValue, extra)
+#endif
+// A Proto string constant owns this slot hint as object bytes. In the
+// compact profile the vector payload is a real four-lane union member, so
+// there is no standalone TValue::extra member to name.
+inline int luauStringSlotHint(const TValue* value)
+{
+    int hint;
+    std::memcpy(&hint, reinterpret_cast<const char*>(value) + LUAU_TVALUE_EXTRA_OFFSET + sizeof(int), sizeof(hint));
+    return hint;
+}
+inline void luauSetStringSlotHint(TValue* value, int hint)
+{
+    std::memcpy(reinterpret_cast<char*>(value) + LUAU_TVALUE_EXTRA_OFFSET + sizeof(int), &hint, sizeof(hint));
+}
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
 #define vvalue(o) check_exp(ttisvector(o), condvectordouble((o)->value.gc->vec.v, (o)->value.v))
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
@@ -104,8 +174,6 @@ typedef struct lua_TValue
 
 #define l_isfalse(o) (ttisnil(o) || (ttisboolean(o) && bvalue(o) == 0))
 
-#define lightuserdatatag(o) check_exp(ttislightuserdata(o), (o)->extra[0])
-
 // Internal tags used by the VM
 #define LU_TAG_ITERATOR LUA_UTAG_LIMIT
 
@@ -117,7 +185,11 @@ typedef struct lua_TValue
 #define checkliveness(g, obj) LUAU_ASSERT(!iscollectable(obj) || ((ttype(obj) == (obj)->value.gc->gch.tt) && !isdead(g, (obj)->value.gc)))
 
 // Macros to set values
+#if defined(LUAU_T24_PACKED_NODE)
+#define setnilvalue(obj) luauSetNil(obj)
+#else
 #define setnilvalue(obj) ((obj)->tt = LUA_TNIL)
+#endif
 
 #define setnvalue(obj, x) \
     { \
@@ -136,6 +208,17 @@ typedef struct lua_TValue
         checkliveness((L)->global, i_o); \
     }
 #else
+#if defined(LUAU_T24_PACKED_NODE)
+#define setvvalue(L, obj, x, y, z, w) \
+    { \
+        TValue* i_o = (obj); \
+        i_o->value.v[0] = float(x); \
+        i_o->value.v[1] = float(y); \
+        i_o->value.v[2] = float(z); \
+        i_o->value.v[3] = float(w); \
+        i_o->tt = LUA_TVECTOR; \
+    }
+#else
 #define setvvalue(L, obj, x, y, z, w) \
     { \
         TValue* i_o = (obj); \
@@ -147,7 +230,17 @@ typedef struct lua_TValue
         i_o->tt = LUA_TVECTOR; \
     }
 #endif
+#endif
 
+#if defined(LUAU_T24_PACKED_NODE)
+#define setpvalue(obj, x, tag) \
+    { \
+        TValue* i_o = (obj); \
+        i_o->value.light.p = (x); \
+        i_o->value.light.extra[0] = (tag); \
+        i_o->tt = LUA_TLIGHTUSERDATA; \
+    }
+#else
 #define setpvalue(obj, x, tag) \
     { \
         TValue* i_o = (obj); \
@@ -155,6 +248,7 @@ typedef struct lua_TValue
         i_o->extra[0] = (tag); \
         i_o->tt = LUA_TLIGHTUSERDATA; \
     }
+#endif
 
 #define setbvalue(obj, x) \
     { \
@@ -231,7 +325,8 @@ typedef struct lua_TValue
     { \
         const TValue* o2 = (obj2); \
         TValue* o1 = (obj1); \
-        *o1 = *o2; \
+        /* Preserve metadata owned by a hash-node destination. */ \
+        luauCopyValue(o1, o2); \
         checkliveness(L->global, o1); \
     }
 
@@ -267,7 +362,11 @@ typedef struct lua_TValue
 // to class instance or static member (needs barrier)
 #define setobj2class setobj
 
+#if defined(LUAU_T24_PACKED_NODE)
+#define setttype(obj, tt) (luauSetKeyType(obj, tt))
+#else
 #define setttype(obj, tt) (ttype(obj) = (tt))
+#endif
 
 #define iscollectable(o) (ttype(o) >= LUA_TSTRING)
 
@@ -552,16 +651,26 @@ typedef struct Closure
 typedef struct TKey
 {
     ::Value value;
+#if !defined(LUAU_T24_PACKED_NODE)
     int extra[LUA_EXTRA_SIZE];
     unsigned tt : 4;
     int next : 28; // for chaining
+#endif
 } TKey;
 
 #define LUAU_T24_FROZEN_HASH_SKIP_ACTIVE 0
 
 #if LUAU_T24_NUMERIC_KEY_HASH
+#if defined(LUAU_T24_PACKED_NODE)
+static_assert(sizeof(TKey) == 16 && offsetof(TKey, value) == 0 && sizeof(Value) == 16 && sizeof(double) == 8,
+    "unexpected compact numeric key hash layout");
+#else
 static_assert(sizeof(TKey) == 24 && offsetof(TKey, extra) == 8 && LUA_EXTRA_SIZE == 2, "unexpected numeric key hash layout");
 #endif
+#endif
+
+
+#define LUAU_T24_BALANCED_VECTOR_CACHE_ACTIVE 0
 
 typedef struct LuaNode
 {
@@ -569,14 +678,62 @@ typedef struct LuaNode
     TKey key;
 } LuaNode;
 
+#if defined(LUAU_T24_PACKED_NODE)
+static_assert(offsetof(TValue, nodekey) == 20 && sizeof(TValue) == 24 && sizeof(TKey) == 16 && sizeof(LuaNode) == 40,
+    "Unexpected compact-node layout");
+static_assert(sizeof(Value) == 16 && offsetof(Value, light.extra) == 8 && offsetof(TValue, tt) == 16,
+    "Unexpected vector or lightuserdata representation");
+// Retain the actual owning node instead of recovering it from a key subobject.
+// The view is ephemeral and must not outlive a resize of its table.
+struct TKeyView
+{
+    LuaNode* node;
+    TKey* operator->() const { return &node->key; }
+};
+struct TKeyConstView
+{
+    const LuaNode* node;
+    const TKey* operator->() const { return &node->key; }
+};
+using TKeyRef = TKeyView;
+inline TKeyView luauKeyView(LuaNode* n) { return {n}; }
+inline TKeyConstView luauKeyView(const LuaNode* n) { return {n}; }
+inline int luauValueType(TKeyView k) { return k.node->val.nodekey.tt; }
+inline int luauValueType(TKeyConstView k) { return k.node->val.nodekey.tt; }
+inline void luauSetKeyType(TKeyView k, int tt) { k.node->val.nodekey.tt = tt; }
+inline void luauSetNil(TKeyView k) { luauSetKeyType(k, LUA_TNIL); }
+#define luauNodeKeyType(n) ((n)->val.nodekey.tt)
+#else
+using TKeyRef = const TKey*;
+#define luauNodeKeyType(n) ((n)->key.tt)
+#endif
+
 // copy a value into a key
+#if defined(LUAU_T24_PACKED_NODE)
+#define setnodekey(L, node, obj) \
+    { \
+        LuaNode* n_ = (node); \
+        const TValue* i_o = (obj); \
+        n_->key.value = i_o->value; \
+        luauNodeKeyType(n_) = i_o->tt; \
+        checkliveness(L->global, i_o); \
+    }
+#define getnodekey(L, obj, node) \
+    { \
+        TValue* i_o = (obj); \
+        const LuaNode* n_ = (node); \
+        i_o->value = n_->key.value; \
+        i_o->tt = luauNodeKeyType(n_); \
+        checkliveness(L->global, i_o); \
+    }
+#else
 #define setnodekey(L, node, obj) \
     { \
         LuaNode* n_ = (node); \
         const TValue* i_o = (obj); \
         n_->key.value = i_o->value; \
         memcpy(n_->key.extra, i_o->extra, sizeof(n_->key.extra)); \
-        n_->key.tt = i_o->tt; \
+        luauNodeKeyType(n_) = i_o->tt; \
         checkliveness(L->global, i_o); \
     }
 
@@ -587,9 +744,10 @@ typedef struct LuaNode
         const LuaNode* n_ = (node); \
         i_o->value = n_->key.value; \
         memcpy(i_o->extra, n_->key.extra, sizeof(i_o->extra)); \
-        i_o->tt = n_->key.tt; \
+        i_o->tt = luauNodeKeyType(n_); \
         checkliveness(L->global, i_o); \
     }
+#endif
 
 // clang-format off
 typedef struct LuaTable
@@ -597,7 +755,7 @@ typedef struct LuaTable
     CommonHeader;
 
     uint8_t tmcache;    // 1<<p means tagmethod(p) is not present
-    uint8_t readonly;   // bit 0 - prohibit writes to table, bit 1 - array contains a metamethod cache
+    uint8_t readonly;   // bit 0 - prohibit writes, bit 1 - array metamethod cache, bit 2 - optional frozen iteration index
     uint8_t safeenv;    // environment doesn't share globals with other scripts
     uint8_t lsizenode;  // log2 of size of `node' array
     uint8_t nodemask8;  // (1<<lsizenode)-1, truncated to 8 bits
@@ -714,7 +872,7 @@ LUAI_DATA const TValue luaO_nilobject_;
 
 LUAI_FUNC int luaO_log2(unsigned int x);
 LUAI_FUNC int luaO_rawequalObj(const TValue* t1, const TValue* t2);
-LUAI_FUNC int luaO_rawequalKey(const TKey* t1, const TValue* t2);
+LUAI_FUNC int luaO_rawequalKey(TKeyRef t1, const TValue* t2);
 LUAI_FUNC int luaO_str2d(const char* s, double* result);
 LUAI_FUNC const char* luaO_pushvfstring(lua_State* L, const char* fmt, va_list argp);
 LUAI_FUNC const char* luaO_pushfstring(lua_State* L, const char* fmt, ...);

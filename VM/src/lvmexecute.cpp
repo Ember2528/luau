@@ -22,6 +22,10 @@ LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
 LUAU_FASTFLAG(LuauRuntimeFeedback)
 
+#if defined(LUAU_T24_DIRECT_TEST_COUNTER)
+extern "C" { unsigned luau_t24_direct_index_hits = 0; unsigned luau_t24_direct_index_nil_fallbacks = 0; }
+#endif
+
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
 #if __has_warning("-Wc99-designator")
@@ -533,7 +537,7 @@ reentry:
                     // tables. Use the constant's full hint only when a slot
                     // cannot fit in that byte, and always validate the hit.
                     bool fullHint = h->lsizenode > 8;
-                    unsigned slot = fullHint ? unsigned(kv->extra[1]) & ((1u << h->lsizenode) - 1)
+                    unsigned slot = fullHint ? unsigned(luauStringSlotHint(kv)) & ((1u << h->lsizenode) - 1)
                                              : LUAU_INSN_C(insn) & h->nodemask8;
 #else
                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
@@ -556,7 +560,7 @@ reentry:
                             int cachedslot = gval2slot(h, res);
 #if LUAU_T24_STRING_CONSTANT_SLOT
                             if (fullHint)
-                                kv->extra[1] = cachedslot;
+                                luauSetStringSlotHint(kv, cachedslot);
 #endif
                             // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                             VM_PATCH_C(pc - 2, cachedslot);
@@ -574,7 +578,7 @@ reentry:
                         // fullHint was captured before a callback could resize
                         // the table or relocate the stack.
                         if (fullHint)
-                            kv->extra[1] = L->cachedslot;
+                            luauSetStringSlotHint(kv, L->cachedslot);
 #endif
                         // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                         VM_PATCH_C(pc - 2, L->cachedslot);
@@ -2777,6 +2781,7 @@ reentry:
                     }
 
                     int sizenode = 1 << h->lsizenode;
+
 
                     // then we advance index through the hash portion
                     while (unsigned(index - sizearray) < unsigned(sizenode))

@@ -819,7 +819,7 @@ static void loadProto(
     // vector constants use that storage for their components and must be left intact.
     for (int j = 0; j < p->sizek; ++j)
         if (ttisstring(&p->k[j]))
-            p->k[j].extra[1] = 0;
+            luauSetStringSlotHint(&p->k[j], 0);
 #endif
 
     for (Instruction* instruction = p->code; instruction < p->code + p->sizecode;)

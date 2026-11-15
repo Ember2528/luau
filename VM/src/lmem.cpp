@@ -117,7 +117,11 @@ LUAU_FASTFLAGVARIABLE(LuauCageSplitData)
 
 #if LUA_VECTOR_SIZE == 4
 static_assert(sizeof(TValue) == ABISWITCH(24, 24, 24), "size mismatch for value");
+#if defined(LUAU_T24_PACKED_NODE)
+static_assert(sizeof(LuaNode) == 40, "size mismatch for experimental compact table entry");
+#else
 static_assert(sizeof(LuaNode) == ABISWITCH(48, 48, 48), "size mismatch for table entry");
+#endif
 #else
 static_assert(sizeof(TValue) == ABISWITCH(16, 16, 16), "size mismatch for value");
 static_assert(sizeof(LuaNode) == ABISWITCH(32, 32, 32), "size mismatch for table entry");

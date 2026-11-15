@@ -44,17 +44,35 @@ LUAU_DYNAMIC_FASTFLAG(LuauTableFindImprovement)
 #define MAXBITS 26
 #define MAXSIZE (1 << MAXBITS)
 
+#if defined(LUAU_T24_BALANCED_VECTOR_TEST_COUNTERS)
+extern "C" {
+uint64_t luau_balanced_vector_hash_calls = 0;
+uint64_t luau_balanced_vector_cache_reuses = 0;
+uint64_t luau_balanced_vector_cache_misses = 0;
+uint64_t luau_balanced_vector_rehash_reuses = 0;
+}
+#endif
+
 static_assert(offsetof(LuaNode, val) == 0, "Unexpected Node memory layout, pointer cast in gval2slot is incorrect");
 
 // TKey is bitpacked for memory efficiency so we need to validate bit counts for worst case
+#if !defined(LUAU_T24_PACKED_NODE)
 static_assert(TKey{{NULL}, {0}, LUA_TDEADKEY, 0}.tt == LUA_TDEADKEY, "not enough bits for tt");
 static_assert(TKey{{NULL}, {0}, LUA_TNIL, MAXSIZE - 1}.next == MAXSIZE - 1, "not enough bits for next");
 static_assert(TKey{{NULL}, {0}, LUA_TNIL, -(MAXSIZE - 1)}.next == -(MAXSIZE - 1), "not enough bits for next");
 
-// empty hash data points to dummynode so that we can always dereference it
+#else
+static_assert(LUA_TDEADKEY < 16 && MAXSIZE - 1 < (1 << 27), "compact key metadata overflow");
+#endif
+
 const LuaNode luaH_dummynode = {
-    {{NULL}, {0}, LUA_TNIL},   // value
-    {{NULL}, {0}, LUA_TNIL, 0} // key
+#if defined(LUAU_T24_PACKED_NODE)
+    {{NULL}, LUA_TNIL, {LUA_TNIL, 0}},
+    {{NULL}}
+#else
+    {{NULL}, {0}, LUA_TNIL},
+    {{NULL}, {0}, LUA_TNIL, 0}
+#endif
 };
 
 #define dummynode (&luaH_dummynode)
@@ -120,18 +138,33 @@ static LuaNode* hashnum(const LuaTable* t, double n) { return hashpow2(t, numeri
 static uint32_t numericKeyHash(const TKey* key)
 {
     uint32_t hash;
+#if defined(LUAU_T24_PACKED_NODE)
+    memcpy(&hash, reinterpret_cast<const char*>(&key->value) + sizeof(double), sizeof(hash));
+#else
     memcpy(&hash, &key->extra[0], sizeof(hash));
+#endif
     return hash;
 }
 
 static void setNumericKeyHash(TKey* key, uint32_t hash)
 {
+#if defined(LUAU_T24_PACKED_NODE)
+    memcpy(reinterpret_cast<char*>(&key->value) + sizeof(double), &hash, sizeof(hash));
+#else
     memcpy(&key->extra[0], &hash, sizeof(hash));
+#endif
 }
+#if defined(LUAU_T24_PACKED_NODE)
+static uint32_t numericKeyHash(TKeyView key) { return numericKeyHash(&key.node->key); }
+static void setNumericKeyHash(TKeyView key, uint32_t hash) { setNumericKeyHash(&key.node->key, hash); }
+#endif
 #endif
 
 LUAU_MAYBE_UNUSED static uint32_t vectorHash(const float* v)
 {
+#if defined(LUAU_T24_BALANCED_VECTOR_TEST_COUNTERS)
+    ++luau_balanced_vector_hash_calls;
+#endif
     unsigned int i[LUA_VECTOR_SIZE];
     memcpy(i, v, sizeof(i));
 
@@ -162,6 +195,9 @@ LUAU_MAYBE_UNUSED static uint32_t vectorHash(const float* v)
 
 static LUAU_MAYBE_UNUSED uint32_t vectorHash(const double* v)
 {
+#if defined(LUAU_T24_BALANCED_VECTOR_TEST_COUNTERS)
+    ++luau_balanced_vector_hash_calls;
+#endif
     uint64_t i[LUA_VECTOR_SIZE];
     memcpy(i, v, sizeof(i));
 
@@ -189,6 +225,7 @@ static LUAU_MAYBE_UNUSED uint32_t vectorHash(const double* v)
 
     return h;
 }
+
 
 static LUAU_MAYBE_UNUSED LuaNode* hashvec(const LuaTable* t, const LUA_VECTOR_TYPE* v)
 {
@@ -263,28 +300,28 @@ LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TGCO>(const LuaTable* t, GCObje
 // TODO: remove with FFlagLuauTableFindImprovement
 // For static luaO_rawequalKey dispatch on a known tag (or GCO). Only used specializations are implemented
 template<int Tag, typename T>
-static LUAU_FORCEINLINE int rawequalkeyvalue(const TKey* t1, T key) = delete;
+static LUAU_FORCEINLINE int rawequalkeyvalue(TKeyRef t1, T key) = delete;
 
 template<>
-LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TBOOLEAN>(const TKey* t1, int key)
+LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TBOOLEAN>(TKeyRef t1, int key)
 {
     return bvalue(t1) == key;
 }
 
 template<>
-LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TNUMBER>(const TKey* t1, double key)
+LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TNUMBER>(TKeyRef t1, double key)
 {
     return luai_numeq(nvalue(t1), key);
 }
 
 template<>
-LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TVECTOR>(const TKey* t1, const LUA_VECTOR_TYPE* key)
+LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TVECTOR>(TKeyRef t1, const LUA_VECTOR_TYPE* key)
 {
     return luai_veceq(vvalue(t1), key);
 }
 
 template<>
-LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TGCO>(const TKey* t1, GCObject* key)
+LUAU_FORCEINLINE int rawequalkeyvalue<LUA_TGCO>(TKeyRef t1, GCObject* key)
 {
     return gcvalue(t1) == key;
 }
@@ -311,16 +348,16 @@ static LUAU_FORCEINLINE const TValue* chainsearchtagged_DEPRECATED(const LuaTabl
 
 // For static raw equality dispatch on a known tag
 template<typename Obj, typename T>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, T rhs) = delete;
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, T rhs) = delete;
 
 template<typename Obj>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, int rhs)
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, int rhs)
 {
     return bvalue(lhs) == rhs;
 }
 
 template<typename Obj>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, double rhs)
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, double rhs)
 {
     return luai_numeq(nvalue(lhs), rhs);
 }
@@ -332,19 +369,19 @@ struct LightUserdataVal
 };
 
 template<typename Obj>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, LightUserdataVal rhs)
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, LightUserdataVal rhs)
 {
     return pvalue(lhs) == rhs.p && lightuserdatatag(lhs) == rhs.extra;
 }
 
 template<typename Obj>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, const LUA_VECTOR_TYPE* rhs)
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, const LUA_VECTOR_TYPE* rhs)
 {
     return luai_veceq(vvalue(lhs), rhs);
 }
 
 template<typename Obj>
-LUAU_FORCEINLINE int rawequalvalue(const Obj* lhs, GCObject* rhs)
+LUAU_FORCEINLINE int rawequalvalue(Obj lhs, GCObject* rhs)
 {
     return gcvalue(lhs) == rhs;
 }
@@ -666,6 +703,7 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
 
 static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 {
+    invalidateFrozenHashIndex(t);
     LUAU_ASSERT(!hasmetacache(t));
 
     if (nasize > MAXSIZE || nhsize > MAXSIZE)
@@ -771,7 +809,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         {
             TValue ok;
             getnodekey(L, &ok, old);
-            setobjt2t(L, reinsertkey(L, t, &ok, true, gkey(old)), gval(old));
+            setobjt2t(L, reinsertkey(L, t, &ok, true, &old->key), gval(old));
         }
     }
 
@@ -932,7 +970,7 @@ static LuaNode* getfreepos(LuaTable* t)
     return NULL; // could not find a free place
 }
 
-template<bool UseNumericHash>
+template<bool UseNumericHash, bool UseVectorHash = false>
 static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode* n)
 {
     LUAU_ASSERT(n != dummynode);
@@ -1004,6 +1042,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
 #endif
 )
 {
+    invalidateFrozenHashIndex(t);
     // enforce boundary invariant
     if (IsIntKey && newintkey == t->sizearray + 1)
     {
@@ -1025,7 +1064,9 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
         mp = hashpow2(t, h);
     }
     else if constexpr (Tag == LUA_TVECTOR)
+    {
         mp = hasQueryHash ? hashpow2(t, queryHash) : mainpositiontagged<Tag>(t, hashkey);
+    }
     else
         mp = mainpositiontagged<Tag>(t, hashkey);
 #else
@@ -1048,9 +1089,9 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
             return newkeytagged<Tag, IsIntKey>(L, t, key, hashkey, newintkey);
         }
 
-        // A nonnumeric incoming key uses the original collision path. Even
-        // if the displaced key is numeric, recomputing its hash is correct;
-        // this keeps numeric-cache checks out of the string-heavy path.
+        // Numeric and vector insertions select their respective cache checks.
+        // Other insertions use the generic path, recomputing a displaced key's
+        // hash to keep cache checks out of string/scalar insertion.
         mp = newcollidingkey<Tag == LUA_TNUMBER>(L, t, mp, n);
     }
 
@@ -1059,6 +1100,7 @@ static LUAU_NOINLINE TValue* newkeytagged(lua_State* L, LuaTable* t, const TValu
     if constexpr (Tag == LUA_TNUMBER)
         setNumericKeyHash(gkey(mp), h);
 #endif
+
 
     if (Tag >= LUA_TSTRING || Tag == LUA_TGCO)
         luaC_barriert(L, t, key);
@@ -1158,7 +1200,7 @@ const TValue* luaH_getp(LuaTable* t, void* key, int tag)
     LuaNode* n = hashpointer(t, key);
     for (;;)
     { // check whether `key' is somewhere in the chain
-        const TKey* nk = gkey(n);
+        auto nk = gkey(n);
         if (ttislightuserdata(nk) && pvalue(nk) == key && lightuserdatatag(nk) == tag)
             return gval(n); // that's it
         if (gnext(n) == 0)
@@ -1363,6 +1405,7 @@ TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
 
 TValue* luaH_setnum(lua_State* L, LuaTable* t, int key)
 {
+    invalidateFrozenHashIndex(t);
     // (1 <= key && key <= t->sizearray)
     if (unsigned(key) - 1 < unsigned(t->sizearray))
         return &t->array[key - 1];
@@ -1396,6 +1439,7 @@ TValue* luaH_setstr(lua_State* L, LuaTable* t, TString* key)
 
 TValue* luaH_setp(lua_State* L, LuaTable* t, void* key, int tag)
 {
+    invalidateFrozenHashIndex(t);
     const TValue* p = luaH_getp(t, key, tag);
     if (p != luaO_nilobject)
         return cast_to(TValue*, p);
@@ -1510,6 +1554,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
 
 void luaH_clear(LuaTable* tt)
 {
+    invalidateFrozenHashIndex(tt);
     // clear array part
     for (int i = 0; i < tt->sizearray; ++i)
     {
