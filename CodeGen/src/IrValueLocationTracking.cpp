@@ -115,7 +115,6 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::STORE_POINTER:
     case IrCmd::STORE_DOUBLE:
     case IrCmd::STORE_INT:
-    case IrCmd::LEGACY_STORE_VECTOR:
     case IrCmd::STORE_VEC_COMPONENTS:
     case IrCmd::STORE_VEC:
     case IrCmd::STORE_TVALUE:

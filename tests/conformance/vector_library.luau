@@ -241,6 +241,11 @@ else
     assert(vector.lerp(noinline(vector.one), vector.zero, 0.5) == vector.create(0.5, 0.5, 0.5))
 end
 
+-- Preserve left-to-right reduction when large components cancel.
+if vector_size == 4 then
+    assert(vector.dot(noinline(vector.create(1e20, 0, -1e20, 1)), vector.one) == 1)
+end
+
 -- validate component access
 assert(vector.create(1, 2, 3).x == 1)
 assert(vector.create(1, 2, 3).X == 1)

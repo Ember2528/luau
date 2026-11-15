@@ -120,10 +120,39 @@ public:
     int tbuffer = parseTagName("tbuffer");
 };
 
+#if LUA_VECTOR_SIZE == 4
+#define ensureVectorSize3() return
+#else
+#define ensureVectorSize3() ((void)0)
+#endif
+
 TEST_SUITE_BEGIN("IrAssembly");
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "TValueRestoreAtUnalignedVmSlot")
+{
+    options.target = AssemblyOptions::A64;
+
+    // R11's 24-byte slot is outside the unscaled load range and is not 16-byte aligned.
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    IrOp value = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(11));
+    build.inst(IrCmd::INTERRUPT, build.constUint(0));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), value, build.constInt(0), build.constTag(tvector));
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+    updateUseCounts(build.function);
+
+    LoweringStats stats;
+    std::string assembly = getAssemblyFromIr(build, options, &stats);
+    INFO(assembly);
+    CHECK_EQ(stats.loweringErrors, 0);
+    CHECK_EQ(stats.regAllocErrors, 0);
+    CHECK_EQ(stats.spillsToSlot, 0);
+    CHECK_GT(stats.spillsToRestore, 0);
+}
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmReg")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
@@ -169,6 +198,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmRegBoth")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
@@ -224,6 +255,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntWithoutChainSpillsToStack")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
@@ -269,6 +302,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintMaterializesIntIntoDeadVmReg")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
     build.beginBlock(entry);
 
@@ -340,6 +375,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintCorruptsTagOnPartialValueKill")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
     build.beginBlock(entry);
 
@@ -421,6 +458,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "MultiNumToXSharedSourceStrandsRestore")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
     build.beginBlock(entry);
 
@@ -503,6 +542,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintUpdateRedirectsLazyRestoreToLaterReg")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
     build.beginBlock(entry);
 
@@ -577,6 +618,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "IntStackSpillIgnoresConvertedRestoreLocation")
 {
+    ensureVectorSize3();
+
     options.includeRegSpills = true;
 
     IrOp entry = build.block(IrBlockKind::Internal);
@@ -655,6 +698,8 @@ bb_2:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedRegisters")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenImprovedExitSync{FFlag::LuauCodegenImprovedExitSync, true};
 
     options.includeOutlinedCode = true;
@@ -729,6 +774,8 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedDependent")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenImprovedExitSync{FFlag::LuauCodegenImprovedExitSync, true};
 
     options.includeOutlinedCode = true;
@@ -818,6 +865,8 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrAssemblyFixture, "LazyHintNotMaterializedInsideScopedSpills")
 {
+    ensureVectorSize3();
+
     options.includeRegSpills = true;
 
     IrOp entry = build.block(IrBlockKind::Internal);
@@ -911,6 +960,22 @@ bb_0:
 
 )"
     );
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "ClassConstructionAtHighVmSlot")
+{
+    options.target = AssemblyOptions::A64;
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    build.inst(IrCmd::CONSTRUCT, build.vmReg(254), build.vmReg(253), build.constUint(0));
+    build.inst(IrCmd::RETURN, build.vmReg(254), build.constInt(1));
+    updateUseCounts(build.function);
+
+    LoweringStats stats;
+    std::string assembly = getAssemblyFromIr(build, options, &stats);
+    INFO(assembly);
+    CHECK_EQ(stats.loweringErrors, 0);
+    CHECK_EQ(stats.regAllocErrors, 0);
 }
 
 TEST_SUITE_END();

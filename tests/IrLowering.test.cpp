@@ -8,6 +8,8 @@
 #include "Luau/Compiler.h"
 #include "Luau/Parser.h"
 #include "Luau/IrBuilder.h"
+#include "Luau/IrAnalysis.h"
+#include "Luau/IrDump.h"
 
 #include "doctest.h"
 #include "ScopedFlags.h"
@@ -317,6 +319,8 @@ public:
 
 TEST_SUITE_BEGIN("IrLowering");
 
+using namespace Luau::CodeGen;
+
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReciprocal")
 {
     ensureVectorFloat();
@@ -336,10 +340,9 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   %7 = FLOAT_TO_VEC 1
-  %8 = LOAD_TVALUE R0, 0i, tvector
+  %8 = LOAD_VEC R0
   %9 = DIV_VEC %7, %8
-  %10 = TAG_VECTOR %9
-  STORE_TVALUE R1, %10
+  STORE_VEC R1, %9
   INTERRUPT 1u
   RETURN R1, 1i
 )"
@@ -398,11 +401,10 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %10 = LOAD_TVALUE R0, 0i, tvector
-  %11 = LOAD_TVALUE R1, 0i, tvector
+  %10 = LOAD_VEC R0
+  %11 = LOAD_VEC R1
   %12 = ADD_VEC %10, %11
-  %13 = TAG_VECTOR %12
-  STORE_TVALUE R2, %13
+  STORE_VEC R2, %12
   INTERRUPT 1u
   RETURN R2, 1i
 )"
@@ -427,10 +429,9 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %6 = LOAD_TVALUE R0, 0i, tvector
+  %6 = LOAD_VEC R0
   %7 = UNM_VEC %6
-  %8 = TAG_VECTOR %7
-  STORE_TVALUE R1, %8
+  STORE_VEC R1, %7
   INTERRUPT 1u
   RETURN R1, 1i
 )"
@@ -458,15 +459,14 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %14 = LOAD_TVALUE R0, 0i, tvector
-  %15 = LOAD_TVALUE R1, 0i, tvector
+  %14 = LOAD_VEC R0
+  %15 = LOAD_VEC R1
   %16 = MUL_VEC %14, %15
-  %23 = LOAD_TVALUE R2, 0i, tvector
-  %24 = LOAD_TVALUE R3, 0i, tvector
-  %25 = DIV_VEC %23, %24
-  %34 = SUB_VEC %16, %25
-  %35 = TAG_VECTOR %34
-  STORE_TVALUE R4, %35
+  %22 = LOAD_VEC R2
+  %23 = LOAD_VEC R3
+  %24 = DIV_VEC %22, %23
+  %32 = SUB_VEC %16, %24
+  STORE_VEC R4, %32
   INTERRUPT 3u
   RETURN R4, 1i
 )"
@@ -492,13 +492,12 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %8 = LOAD_TVALUE R0, 0i, tvector
+  %8 = LOAD_VEC R0
   %10 = MUL_VEC %8, %8
-  %19 = SUB_VEC %10, %10
-  %28 = ADD_VEC %10, %10
-  %37 = DIV_VEC %19, %28
-  %38 = TAG_VECTOR %37
-  STORE_TVALUE R2, %38
+  %18 = SUB_VEC %10, %10
+  %26 = ADD_VEC %10, %10
+  %34 = DIV_VEC %18, %26
+  STORE_VEC R2, %34
   INTERRUPT 4u
   RETURN R2, 1i
 )"
@@ -526,23 +525,22 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %12 = LOAD_TVALUE R0, 0i, tvector
+  %12 = LOAD_VEC R0
   %14 = FLOAT_TO_VEC 2
   %15 = MUL_VEC %12, %14
-  %20 = LOAD_TVALUE R1, 0i, tvector
-  %22 = FLOAT_TO_VEC 4
-  %23 = DIV_VEC %20, %22
-  %32 = ADD_VEC %15, %23
-  %37 = LOAD_TVALUE R2, 0i, tvector
-  %39 = FLOAT_TO_VEC 0.5
-  %40 = MUL_VEC %37, %39
-  %49 = ADD_VEC %32, %40
-  %55 = FLOAT_TO_VEC 40
-  %56 = LOAD_TVALUE R3, 0i, tvector
-  %57 = DIV_VEC %55, %56
-  %66 = ADD_VEC %49, %57
-  %67 = TAG_VECTOR %66
-  STORE_TVALUE R4, %67
+  %19 = LOAD_VEC R1
+  %21 = FLOAT_TO_VEC 4
+  %22 = DIV_VEC %19, %21
+  %30 = ADD_VEC %15, %22
+  %34 = LOAD_VEC R2
+  %36 = FLOAT_TO_VEC 0.5
+  %37 = MUL_VEC %34, %36
+  %45 = ADD_VEC %30, %37
+  %50 = FLOAT_TO_VEC 40
+  %51 = LOAD_VEC R3
+  %52 = DIV_VEC %50, %51
+  %60 = ADD_VEC %45, %52
+  STORE_VEC R4, %60
   INTERRUPT 7u
   RETURN R4, 1i
 )"
@@ -570,8 +568,8 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %15 = LOAD_TVALUE R0, 0i, tvector
-  %16 = LOAD_TVALUE R1, 0i, tvector
+  %15 = LOAD_VEC R0
+  %16 = LOAD_VEC R1
   %17 = LOAD_DOUBLE R2
   %18 = NUM_TO_FLOAT %17
   %19 = FLOAT_TO_VEC %18
@@ -579,8 +577,7 @@ bb_bytecode_1:
   %21 = SUB_VEC %16, %15
   %22 = MULADD_VEC %21, %19, %15
   %23 = SELECT_VEC %22, %16, %19, %20
-  %24 = TAG_VECTOR %23
-  STORE_TVALUE R3, %24
+  STORE_VEC R3, %23
   INTERRUPT 8u
   RETURN R3, 1i
 )"
@@ -607,14 +604,12 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %11 = LOAD_TVALUE R0, 0i, tvector
-  %12 = LOAD_TVALUE R1, 0i, tvector
+  %11 = LOAD_VEC R0
+  %12 = LOAD_VEC R1
   %13 = MIN_VEC %12, %11
-  %14 = TAG_VECTOR %13
-  STORE_TVALUE R2, %14
-  %24 = MAX_VEC %12, %11
-  %25 = TAG_VECTOR %24
-  STORE_TVALUE R3, %25
+  STORE_VEC R2, %13
+  %23 = MAX_VEC %12, %11
+  STORE_VEC R3, %23
   INTERRUPT 14u
   RETURN R2, 2i
 )"
@@ -639,16 +634,13 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %7 = LOAD_TVALUE R0, 0i, tvector
+  %7 = LOAD_VEC R0
   %8 = ABS_VEC %7
-  %9 = TAG_VECTOR %8
-  STORE_TVALUE R1, %9
-  %16 = FLOOR_VEC %7
-  %17 = TAG_VECTOR %16
-  STORE_TVALUE R2, %17
-  %24 = CEIL_VEC %7
-  %25 = TAG_VECTOR %24
-  STORE_TVALUE R3, %25
+  STORE_VEC R1, %8
+  %15 = FLOOR_VEC %7
+  STORE_VEC R2, %15
+  %22 = CEIL_VEC %7
+  STORE_VEC R3, %22
   INTERRUPT 15u
   RETURN R1, 3i
 )"
@@ -1226,10 +1218,10 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   %4 = LOAD_TVALUE K0 (1, 2, 3), 0i, tvector
-  %11 = LOAD_TVALUE R0, 0i, tvector
-  %12 = ADD_VEC %4, %11
-  %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
+  %10 = TVALUE_TO_VEC %4
+  %11 = LOAD_VEC R0
+  %12 = ADD_VEC %10, %11
+  STORE_VEC R1, %12
   INTERRUPT 2u
   RETURN R1, 1i
 )"
@@ -1309,6 +1301,8 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccess")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1346,6 +1340,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecall")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
@@ -1424,6 +1420,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccessChain")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1454,8 +1452,7 @@ bb_bytecode_1:
   %18 = MUL_FLOAT %8, %17
   %19 = MUL_FLOAT %9, %17
   %20 = MUL_FLOAT %10, %17
-  STORE_VECTOR R3, %18, %19, %20
-  STORE_TAG R3, tvector
+  %21 = BUILD_VEC %18, %19, %20
   %25 = LOAD_FLOAT R1, 0i
   %26 = LOAD_FLOAT R1, 4i
   %27 = LOAD_FLOAT R1, 8i
@@ -1465,11 +1462,9 @@ bb_bytecode_1:
   %31 = ADD_FLOAT %28, %29
   %32 = ADD_FLOAT %31, %30
   %33 = SQRT_FLOAT %32
-  %41 = LOAD_TVALUE R3, 0i, tvector
   %44 = FLOAT_TO_VEC %33
-  %45 = MUL_VEC %41, %44
-  %46 = TAG_VECTOR %45
-  STORE_TVALUE R2, %46
+  %45 = MUL_VEC %21, %44
+  STORE_VEC R2, %45
   INTERRUPT 5u
   RETURN R2, 1i
 )"
@@ -1478,6 +1473,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
@@ -1514,18 +1511,13 @@ bb_bytecode_1:
   %26 = MUL_FLOAT %14, %17
   %27 = MUL_FLOAT %16, %15
   %28 = SUB_FLOAT %26, %27
-  STORE_VECTOR R4, %22, %25, %28
-  STORE_TAG R4, tvector
   %31 = LOAD_TVALUE R1, 0i, tvector
-  %37 = LOAD_FLOAT R4, 0i
   %38 = EXTRACT_VEC %31, 0i
-  %39 = MUL_FLOAT %37, %38
-  %40 = LOAD_FLOAT R4, 4i
+  %39 = MUL_FLOAT %22, %38
   %41 = EXTRACT_VEC %31, 1i
-  %42 = MUL_FLOAT %40, %41
-  %43 = LOAD_FLOAT R4, 8i
+  %42 = MUL_FLOAT %25, %41
   %44 = EXTRACT_VEC %31, 2i
-  %45 = MUL_FLOAT %43, %44
+  %45 = MUL_FLOAT %28, %44
   %46 = ADD_FLOAT %39, %42
   %47 = ADD_FLOAT %46, %45
   %48 = FLOAT_TO_NUM %47
@@ -1540,6 +1532,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain2")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
@@ -1586,7 +1580,7 @@ bb_4:
   %34 = MUL_FLOAT %22, %25
   %35 = MUL_FLOAT %24, %23
   %36 = SUB_FLOAT %34, %35
-  STORE_VECTOR R3, %30, %33, %36
+  STORE_VEC_COMPONENTS R3, %30, %33, %36
   %41 = LOAD_POINTER R0
   %42 = GET_SLOT_NODE_ADDR %41, 7u, K3 ('b')
   CHECK_SLOT_MATCH %42, K3 ('b'), bb_fallback_5
@@ -1637,13 +1631,12 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %6 = LOAD_TVALUE R0, 0i, tvector
+  %6 = LOAD_VEC R0
   %8 = FLOAT_TO_VEC 2
   %9 = MUL_VEC %6, %8
-  %14 = EXTRACT_VEC %9, 0i
-  %20 = EXTRACT_VEC %9, 1i
-  STORE_VECTOR R1, %14, %20, %14
-  STORE_TAG R1, tvector
+  %13 = EXTRACT_VEC %9, 0i
+  %19 = EXTRACT_VEC %9, 1i
+  STORE_VEC_COMPONENTS R1, %13, %19, %13
   INTERRUPT 11u
   RETURN R1, 1i
 )"
@@ -1674,24 +1667,23 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %9 = LOAD_TVALUE R0, 0i, tvector
+  %9 = LOAD_VEC R0, 0i
   %10 = DOT_VEC %9, %9, 3i
   %11 = SQRT_FLOAT %10
   %12 = DIV_FLOAT 1, %11
   %13 = FLOAT_TO_VEC %12
   %14 = MUL_VEC %9, %13
-  %21 = LOAD_TVALUE R1, 0i, tvector
-  %22 = DOT_VEC %21, %21, 3i
-  %23 = SQRT_FLOAT %22
-  %24 = FLOAT_TO_NUM %23
-  %35 = DOT_VEC %9, %21, 3i
-  %36 = FLOAT_TO_NUM %35
-  %46 = ADD_NUM %24, %36
-  %55 = NUM_TO_FLOAT %46
-  %56 = FLOAT_TO_VEC %55
-  %57 = MUL_VEC %14, %56
-  %58 = TAG_VECTOR %57
-  STORE_TVALUE R2, %58
+  %20 = LOAD_VEC R1, 0i
+  %21 = DOT_VEC %20, %20, 3i
+  %22 = SQRT_FLOAT %21
+  %23 = FLOAT_TO_NUM %22
+  %34 = DOT_VEC %9, %20, 3i
+  %35 = FLOAT_TO_NUM %34
+  %45 = ADD_NUM %23, %35
+  %54 = NUM_TO_FLOAT %45
+  %55 = FLOAT_TO_VEC %54
+  %56 = MUL_VEC %14, %55
+  STORE_VEC R2, %56
   INTERRUPT 19u
   RETURN R2, 1i
 )"
@@ -1722,16 +1714,16 @@ bb_0:
 bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
-  %6 = LOAD_TVALUE R0, 0i, tvector
+  %6 = LOAD_VEC R0
   %8 = FLOAT_TO_VEC 1.5
   %9 = MUL_VEC %6, %8
-  %16 = FLOAT_TO_VEC 1
-  %17 = IDIV_VEC %9, %16
-  %26 = SUB_VEC %9, %17
-  %29 = LOAD_TVALUE K2 (0.5, 0.5, 0.5), 0i, tvector
-  %37 = SUB_VEC %26, %29
-  %38 = TAG_VECTOR %37
-  STORE_TVALUE R0, %38
+  %15 = FLOAT_TO_VEC 1
+  %16 = IDIV_VEC %9, %15
+  %24 = SUB_VEC %9, %16
+  %26 = LOAD_TVALUE K2 (0.5, 0.5, 0.5), 0i, tvector
+  %33 = TVALUE_TO_VEC %26
+  %34 = SUB_VEC %24, %33
+  STORE_VEC R0, %34
   INTERRUPT 5u
   RETURN R0, 1i
 )"
@@ -1740,6 +1732,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed1")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1770,22 +1764,22 @@ bb_bytecode_1:
   STORE_TAG R2, tnumber
   JUMP bb_linear_11
 bb_linear_11:
-  %60 = LOAD_POINTER R0
-  %62 = TRY_NUM_TO_INDEX %6, bb_fallback_5
-  %63 = SUB_INT %62, 1i
-  CHECK_ARRAY_SIZE %60, %63, bb_fallback_5
-  CHECK_NO_METATABLE %60, bb_fallback_5
-  %66 = GET_ARR_ADDR %60, %63
-  %67 = LOAD_TVALUE %66
-  STORE_TVALUE R4, %67
-  %73 = SUB_NUM 1, %7
+  %59 = LOAD_POINTER R0
+  %61 = TRY_NUM_TO_INDEX %6, bb_fallback_5
+  %62 = SUB_INT %61, 1i
+  CHECK_ARRAY_SIZE %59, %62, bb_fallback_5
+  CHECK_NO_METATABLE %59, bb_fallback_5
+  %65 = GET_ARR_ADDR %59, %62
+  %66 = LOAD_TVALUE %65
+  STORE_TVALUE R4, %66
+  %72 = SUB_NUM 1, %7
   CHECK_TAG R4, tvector, bb_exit_12
-   ; exit sync: R5, {%73}
-  %83 = NUM_TO_FLOAT %73
-  %84 = FLOAT_TO_VEC %83
-  %85 = MUL_VEC %67, %84
-  %86 = TAG_VECTOR %85
-  STORE_TVALUE R3, %86
+   ; exit sync: R5, {%72}
+  %80 = TVALUE_TO_VEC %66
+  %82 = NUM_TO_FLOAT %72
+  %83 = FLOAT_TO_VEC %82
+  %84 = MUL_VEC %80, %83
+  STORE_VEC R3, %84
   INTERRUPT 4u
   RETURN R3, 1i
 )"
@@ -1824,13 +1818,12 @@ bb_bytecode_1:
 bb_4:
   CHECK_TAG R4, tvector, exit(2)
   CHECK_TAG R5, tnumber, bb_fallback_5
-  %24 = LOAD_TVALUE R4, 0i, tvector
+  %24 = LOAD_VEC R4
   %25 = LOAD_DOUBLE R5
   %26 = NUM_TO_FLOAT %25
   %27 = FLOAT_TO_VEC %26
   %28 = MUL_VEC %24, %27
-  %29 = TAG_VECTOR %28
-  STORE_TVALUE R3, %29
+  STORE_VEC R3, %28
   JUMP bb_6
 bb_6:
   INTERRUPT 3u
@@ -1866,10 +1859,10 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   %4 = LOAD_TVALUE K0 (1, 2, 3), 0i, tvector
-  %11 = LOAD_TVALUE R0, 0i, tvector
-  %12 = ADD_VEC %4, %11
-  %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
+  %10 = TVALUE_TO_VEC %4
+  %11 = LOAD_VEC R0
+  %12 = ADD_VEC %10, %11
+  STORE_VEC R1, %12
   INTERRUPT 2u
   RETURN R1, 1i
 )"
@@ -2028,6 +2021,8 @@ bb_bytecode_4:
 
 TEST_CASE_FIXTURE(LoweringFixture, "EntryBlockChecksWithOptional1")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2070,6 +2065,8 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "EntryBlockChecksWithOptional2")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2167,6 +2164,8 @@ bb_bytecode_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ExplicitUpvalueAndLocalTypes")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -2215,6 +2214,8 @@ bb_bytecode_0:
 // Our fast-path lowering checks that there is no metatable and all accesses are in bounds
 TEST_CASE_FIXTURE(LoweringFixture, "DuplicateArrayLoads1")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2277,6 +2278,8 @@ bb_linear_17:
 // Our fast-path lowering checks that there is no metatable and all accesses are in bounds
 TEST_CASE_FIXTURE(LoweringFixture, "DuplicateArrayLoads2")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2420,6 +2423,8 @@ bb_linear_23:
 // Our fast-path lowering checks that there is no metatable and all accesses are in bounds
 TEST_CASE_FIXTURE(LoweringFixture, "DuplicateArrayLoads4")
 {
+    ensureVectorSize3();
+
     // TODO: opportunity 1 - if we can figure out that i+1 is exactly 1 integer slot away, we can reduce arithmetic
     // TODO: opportunity 2 - store at [i + 1] shouldn't invalidate value at [i]
     CHECK_EQ(
@@ -2605,6 +2610,8 @@ bb_linear_11:
 // Note that CHECK_SLOT_MATCH ensures that key is in mainposition and not nil, so metatable is not triggered
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp1")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2676,6 +2683,8 @@ bb_linear_23:
 // Note that CHECK_SLOT_MATCH ensures that key is in mainposition and not nil, so metatable is not triggered
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp2")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2736,6 +2745,8 @@ bb_linear_23:
 // In this test we write an unknown key and t.x can be affected and has to be reloaded
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp3")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2790,6 +2801,8 @@ bb_linear_9:
 // Our fast-path lowering checks that there is no metatable and all accesses are in bounds, so rehash is not possible
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp4")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2882,55 +2895,53 @@ bb_bytecode_1:
   STORE_TVALUE R3, %11
   JUMP bb_linear_34
 bb_linear_34:
-  %250 = GET_SLOT_NODE_ADDR %8, 2u, K1 ('h')
-  CHECK_SLOT_MATCH %250, K1 ('h'), bb_fallback_5
-  %252 = LOAD_TVALUE %250, 0i
-  STORE_TVALUE R4, %252
+  %245 = GET_SLOT_NODE_ADDR %8, 2u, K1 ('h')
+  CHECK_SLOT_MATCH %245, K1 ('h'), bb_fallback_5
+  %247 = LOAD_TVALUE %245, 0i
+  STORE_TVALUE R4, %247
   CHECK_SAFE_ENV exit(4)
   CHECK_TAG R3, tnumber, exit(6)
   CHECK_TAG R4, tnumber, exit(6)
-  %260 = LOAD_DOUBLE R3
-  %261 = LOAD_DOUBLE R4
-  %262 = NUM_TO_FLOAT %260
-  %263 = NUM_TO_FLOAT %261
-  STORE_VECTOR R2, %262, %263, 0
-  STORE_TAG R2, tvector
-  %267 = LOAD_TVALUE R1, 0i, tvector
-  %268 = LOAD_TVALUE R2, 0i, tvector
-  %269 = MUL_VEC %267, %268
-  %272 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
-  %274 = SUB_VEC %269, %272
-  %277 = FLOOR_VEC %274
-  %281 = CEIL_VEC %274
-  %285 = SUB_VEC %274, %277
-  %286 = TAG_VECTOR %285
-  STORE_TVALUE R4, %286
-  %288 = EXTRACT_VEC %277, 0i
-  %289 = FLOAT_TO_NUM %288
+  %255 = LOAD_DOUBLE R3
+  %256 = LOAD_DOUBLE R4
+  %257 = NUM_TO_FLOAT %255
+  %258 = NUM_TO_FLOAT %256
+  %259 = BUILD_VEC %257, %258, 0
+  %262 = LOAD_VEC R1
+  %263 = MUL_VEC %262, %259
+  %265 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
+  %267 = TVALUE_TO_VEC %265
+  %268 = SUB_VEC %263, %267
+  %270 = FLOOR_VEC %268
+  %273 = CEIL_VEC %268
+  %276 = SUB_VEC %268, %270
+  STORE_VEC R4, %276
+  %278 = EXTRACT_VEC %270, 0i
+  %279 = FLOAT_TO_NUM %278
   STORE_TVALUE R7, %11
-  %302 = MOD_NUM %289, %260
-  STORE_DOUBLE R5, %302
+  %292 = MOD_NUM %279, %255
+  STORE_DOUBLE R5, %292
   STORE_TAG R5, tnumber
-  %306 = EXTRACT_VEC %281, 0i
-  %307 = FLOAT_TO_NUM %306
-  STORE_DOUBLE R7, %307
+  %296 = EXTRACT_VEC %273, 0i
+  %297 = FLOAT_TO_NUM %296
+  STORE_DOUBLE R7, %297
   STORE_TVALUE R8, %11
-  %320 = MOD_NUM %307, %260
-  STORE_SPLIT_TVALUE R6, tnumber, %320
-  %324 = EXTRACT_VEC %277, 1i
-  %325 = FLOAT_TO_NUM %324
-  %338 = MOD_NUM %325, %261
-  STORE_DOUBLE R8, %338
+  %310 = MOD_NUM %297, %255
+  STORE_SPLIT_TVALUE R6, tnumber, %310
+  %314 = EXTRACT_VEC %270, 1i
+  %315 = FLOAT_TO_NUM %314
+  %328 = MOD_NUM %315, %256
+  STORE_DOUBLE R8, %328
   STORE_TVALUE R9, %11
-  %354 = MUL_NUM %338, %260
-  STORE_DOUBLE R7, %354
-  %358 = EXTRACT_VEC %281, 1i
-  %359 = FLOAT_TO_NUM %358
-  STORE_DOUBLE R9, %359
-  %372 = MOD_NUM %359, %261
-  STORE_DOUBLE R8, %372
-  %388 = MUL_NUM %372, %260
-  STORE_SPLIT_TVALUE R8, tnumber, %388
+  %344 = MUL_NUM %328, %255
+  STORE_DOUBLE R7, %344
+  %348 = EXTRACT_VEC %273, 1i
+  %349 = FLOAT_TO_NUM %348
+  STORE_DOUBLE R9, %349
+  %362 = MOD_NUM %349, %256
+  STORE_DOUBLE R8, %362
+  %378 = MUL_NUM %362, %255
+  STORE_SPLIT_TVALUE R8, tnumber, %378
   INTERRUPT 50u
   RETURN R4, 5i
 )"
@@ -2940,6 +2951,8 @@ bb_linear_34:
 // This test checks that in case of known constants, we propagate them in full and can recover the constant difference
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp6")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -2987,6 +3000,8 @@ bb_linear_15:
 // Invalidating CHECK_SLOT_MATCH of one key with nil does not cause CHECK_NODE_VALUE of the other
 TEST_CASE_FIXTURE(LoweringFixture, "TableNodeLoadStoreProp7")
 {
+    ensureVectorSize3();
+
     // TODO: opportunity - table barrier is not needed when values come from the same table
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -3032,6 +3047,8 @@ bb_linear_11:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoadEnvReuse")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3076,6 +3093,8 @@ bb_linear_9:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CheckReadonlyEliminationOnSsaValues")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3239,6 +3258,8 @@ bb_linear_15:
 
 TEST_CASE_FIXTURE(LoweringFixture, "TableStoreForwardUnknownTag")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3358,8 +3379,7 @@ bb_bytecode_0:
    ; exit sync: R5, R4, {}
   %11 = LOAD_DOUBLE R0
   %14 = NUM_TO_FLOAT %11
-  STORE_VECTOR R2, %14, 2, 3
-  STORE_TAG R2, tvector
+  STORE_VEC_COMPONENTS R2, %14, 2, 3
   JUMP_IF_FALSY R1, bb_bytecode_1, bb_3
 bb_3:
   %23 = LOAD_FLOAT R2, 0i
@@ -3413,10 +3433,9 @@ bb_bytecode_0:
    ; exit sync: R5, R4, {}
   %11 = LOAD_DOUBLE R0
   %14 = NUM_TO_FLOAT %11
-  STORE_VECTOR R2, %14, 2, 3
-  STORE_TAG R2, tvector
-  %20 = LOAD_TVALUE R2, 0i, tvector
-  SET_UPVALUE U0, %20, tvector
+  %17 = BUILD_VEC %14, 2, 3
+  %20 = TAG_VECTOR %17
+  SET_UPVALUE U0, %20, undef
   JUMP_IF_FALSY R1, bb_bytecode_1, bb_3
 bb_3:
   %23 = GET_UPVALUE U0
@@ -3448,6 +3467,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoadAndMoveTypePropagation")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -3540,12 +3561,9 @@ bb_bytecode_0:
    ; exit sync: R5, R3, {}
   %12 = LOAD_DOUBLE R1
   %15 = NUM_TO_FLOAT %12
-  STORE_VECTOR R2, 1, %15, 3
-  STORE_TAG R2, tvector
   %25 = FLOAT_TO_NUM %15
   %40 = ADD_NUM %25, 3
-  STORE_DOUBLE R2, %40
-  STORE_TAG R2, tnumber
+  STORE_SPLIT_TVALUE R2, tnumber, %40
   INTERRUPT 14u
   RETURN R2, 1i
 )"
@@ -3607,6 +3625,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ResolveTablePathTypes")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -3776,6 +3796,8 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "ResolveVectorNamecalls")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -3842,6 +3864,8 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ImmediateTypeAnnotationHelp")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -3871,11 +3895,10 @@ bb_bytecode_0:
   JUMP bb_2
 bb_2:
   CHECK_TAG R3, tvector, exit(1)
-  %19 = LOAD_TVALUE R3, 0i, tvector
+  %19 = LOAD_VEC R3
   %21 = FLOAT_TO_VEC 5
   %22 = DIV_VEC %19, %21
-  %23 = TAG_VECTOR %22
-  STORE_TVALUE R2, %23
+  STORE_VEC R2, %22
   INTERRUPT 2u
   RETURN R2, 1i
 )"
@@ -3908,6 +3931,8 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "ForInManualAnnotation")
 {
+    ensureVectorSize3();
+
     ensureVectorFloat();
 
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
@@ -4179,11 +4204,10 @@ bb_bytecode_1:
   FALLBACK_GETTABLEKS 2u, R3, R0, K1 ('Row2')
   CHECK_TAG R2, tvector, exit(4)
   CHECK_TAG R3, tvector, exit(4)
-  %14 = LOAD_TVALUE R2, 0i, tvector
-  %15 = LOAD_TVALUE R3, 0i, tvector
+  %14 = LOAD_VEC R2
+  %15 = LOAD_VEC R3
   %16 = MUL_VEC %14, %15
-  %17 = TAG_VECTOR %16
-  STORE_TVALUE R1, %17
+  STORE_VEC R1, %16
   INTERRUPT 5u
   RETURN R1, 1i
 )"
@@ -4192,6 +4216,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataNamecall1")
 {
+    ensureVectorSize3();
+
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4244,6 +4270,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataNamecall2")
 {
+    ensureVectorSize3();
+
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -4460,6 +4488,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataMapping")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
     // This test requires runtime component to be present
@@ -4531,12 +4561,13 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   %4 = LOAD_TVALUE K0 (1, 0, 0), 0i, tvector
-  %11 = LOAD_TVALUE R0, 0i, tvector
-  %12 = MUL_VEC %4, %11
-  %15 = LOAD_TVALUE K1 (0, 1, 0), 0i, tvector
-  %23 = ADD_VEC %12, %15
-  %24 = TAG_VECTOR %23
-  STORE_TVALUE R1, %24
+  %10 = TVALUE_TO_VEC %4
+  %11 = LOAD_VEC R0
+  %12 = MUL_VEC %10, %11
+  %14 = LOAD_TVALUE K1 (0, 1, 0), 0i, tvector
+  %21 = TVALUE_TO_VEC %14
+  %22 = ADD_VEC %12, %21
+  STORE_VEC R1, %22
   INTERRUPT 4u
   RETURN R1, 1i
 )"
@@ -4569,10 +4600,10 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   %4 = LOAD_TVALUE K0 (0, 0, 0), 0i, tvector
-  %11 = LOAD_TVALUE R0, 0i, tvector
-  %12 = ADD_VEC %4, %11
-  %13 = TAG_VECTOR %12
-  STORE_TVALUE R1, %13
+  %10 = TVALUE_TO_VEC %4
+  %11 = LOAD_VEC R0
+  %12 = ADD_VEC %10, %11
+  STORE_VEC R1, %12
   INTERRUPT 2u
   RETURN R1, 1i
 )"
@@ -4707,9 +4738,7 @@ bb_bytecode_1:
   %96 = UINT_TO_FLOAT %12
   %97 = UINT_TO_FLOAT %23
   %98 = UINT_TO_FLOAT %81
-  STORE_VECTOR R5, %96, %97, %98, tvector
-  %102 = LOAD_TVALUE R5, 0i, tvector
-  STORE_TVALUE R6, %102
+  STORE_VEC_COMPONENTS R6, %96, %97, %98
   %107 = FLOAT_TO_NUM %96
   %113 = FLOAT_TO_NUM %97
   %122 = ADD_NUM %107, %113
@@ -4881,8 +4910,7 @@ bb_bytecode_1:
   %6 = LOAD_FLOAT R0, 8i
   %12 = LOAD_FLOAT R0, 0i
   %18 = LOAD_FLOAT R0, 4i
-  STORE_VECTOR R1, %6, %12, %18
-  STORE_TAG R1, tvector
+  STORE_VEC_COMPONENTS R1, %6, %12, %18
   INTERRUPT 10u
   RETURN R1, 1i
 )"
@@ -4915,7 +4943,7 @@ bb_bytecode_1:
   %8 = LOAD_FLOAT R0, 0i
   %20 = LOAD_FLOAT R0, 8i
   %42 = LOAD_FLOAT R1, 4i
-  STORE_VECTOR R4, %20, %42, %8, tvector
+  STORE_VEC_COMPONENTS R4, %20, %42, %8
   INTERRUPT 30u
   RETURN R4, 1i
 )"
@@ -5022,8 +5050,7 @@ bb_bytecode_1:
   %7 = ADD_NUM %6, %6
   %17 = NUM_TO_FLOAT %6
   %18 = NUM_TO_FLOAT %7
-  STORE_VECTOR R1, %17, %18, 0
-  STORE_TAG R1, tvector
+  STORE_VEC_COMPONENTS R1, %17, %18, 0
   INTERRUPT 7u
   RETURN R1, 1i
 )"
@@ -5379,6 +5406,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveLoopRangeBase")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
     // TODO: opportunity 1 - buffer.len is not a fastcall, but under safe env we can treat it like one and read buffer len field
@@ -6129,6 +6158,8 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferEffects")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenMarkUsed{FFlag::LuauCodegenMarkUsed, true};
 
     CHECK_EQ(
@@ -6385,6 +6416,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "OptionalOr")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a, b)
@@ -6430,6 +6463,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LinearAndOr")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a, b)
@@ -6465,6 +6500,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "OldStyleConditional")
 {
+    ensureVectorSize3();
+
     // TODO: opportunity - this can be done in two SELECT_IF_TRUTHY, but we cannot match such complex sequences right now
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
@@ -6506,6 +6543,8 @@ bb_bytecode_3:
 
 TEST_CASE_FIXTURE(LoweringFixture, "NewStyleConditional")
 {
+    ensureVectorSize3();
+
     // TODO: opportunity - this can be done in one SELECT_IF_TRUTHY, but this is also hard to detect in current system
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
@@ -7207,6 +7246,8 @@ do end
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore1")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local m = 1
@@ -7249,6 +7290,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore2")
 {
+    ensureVectorSize3();
+
     // TODO: opportunity - if the value was just stored to VM register in parts, we can use those parts to store upvalue
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
@@ -7292,6 +7335,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore3")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local m = 1
@@ -7334,6 +7379,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore4")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local arr: {number}
@@ -7754,6 +7801,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection1")
 {
+    ensureVectorSize3();
+
     assemblyOptions.includeRegFlowInfo = Luau::CodeGen::IncludeRegFlowInfo::Yes;
 
     CHECK_EQ(
@@ -7817,6 +7866,8 @@ bb_bytecode_3:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection2")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -7991,8 +8042,7 @@ bb_bytecode_1:
   %181 = NUM_TO_FLOAT %57
   %182 = NUM_TO_FLOAT %112
   %183 = NUM_TO_FLOAT %167
-  STORE_VECTOR R2, %181, %182, %183
-  STORE_TAG R2, tvector
+  STORE_VEC_COMPONENTS R2, %181, %182, %183
   INTERRUPT 52u
   RETURN R2, 1i
 )"
@@ -8027,7 +8077,7 @@ bb_2:
   JUMP bb_bytecode_1
 bb_bytecode_1:
   implicit CHECK_SAFE_ENV exit(0)
-  %7 = LOAD_TVALUE R0, 0i, tvector
+  %7 = LOAD_VEC R0, 0i
   %8 = DOT_VEC %7, %7, 3i
   %9 = SQRT_FLOAT %8
   %10 = FLOAT_TO_NUM %9
@@ -8041,8 +8091,7 @@ bb_bytecode_1:
   %104 = NUM_TO_FLOAT %30
   %105 = NUM_TO_FLOAT %60
   %106 = NUM_TO_FLOAT %90
-  STORE_VECTOR R1, %104, %105, %106
-  STORE_TAG R1, tvector
+  STORE_VEC_COMPONENTS R1, %104, %105, %106
   INTERRUPT 37u
   RETURN R1, 1i
 )"
@@ -8075,14 +8124,13 @@ bb_bytecode_1:
   STORE_POINTER R2, %7
   STORE_TAG R2, ttable
   CHECK_GC
-  %13 = LOAD_TVALUE R0, 0i, tvector
+  %13 = LOAD_VEC R0
   %15 = FLOAT_TO_VEC 2
   %16 = MUL_VEC %13, %15
-  %24 = LOAD_TVALUE R1, 0i, tvector
-  %25 = ADD_VEC %16, %24
-  %26 = TAG_VECTOR %25
-  STORE_TVALUE R3, %26
-  STORE_TVALUE R4, %26
+  %23 = LOAD_VEC R1
+  %24 = ADD_VEC %16, %23
+  STORE_VEC R3, %24
+  STORE_VEC R4, %24
   SETLIST 6u, R2, R3, 2i, 1u, 2u
   INTERRUPT 8u
   RETURN R2, 1i
@@ -8092,6 +8140,8 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "TableOperationTagSuggestion1")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -8146,6 +8196,8 @@ bb_linear_9:
 
 TEST_CASE_FIXTURE(LoweringFixture, "TableOperationTagSuggestion2")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
     CHECK_EQ(
@@ -8400,6 +8452,8 @@ bb_2:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferWriteChecksExtraArgs")
 {
+    ensureVectorSize3();
+
     CHECK_EQ(
         "\n" + getCodegenAssembly(
                    R"(
@@ -8447,6 +8501,8 @@ bb_bytecode_1:
 }
 TEST_CASE_FIXTURE(LoweringFixture, "OptionalUserdataTypeRemapping")
 {
+    ensureVectorSize3();
+
     // This test requires runtime component to be present
     if (!Luau::CodeGen::isSupported())
         return;
@@ -8528,6 +8584,8 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ClassConstruction")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag debugLuauUserDefinedClasses{FFlag::DebugLuauUserDefinedClasses, true};
     ScopedFastFlag debugLuauUserDefinedClassesRuntime{FFlag::DebugLuauUserDefinedClassesRuntime, true};
 

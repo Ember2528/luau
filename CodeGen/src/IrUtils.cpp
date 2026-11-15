@@ -155,48 +155,6 @@ IrValueKind getCmdValueKind(IrCmd cmd)
 {
     switch (cmd)
     {
-    case IrCmd::LEGACY_STORE_VECTOR:
-        return IrValueKind::None;
-    case IrCmd::LEGACY_SELECT_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_ADD_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_SUB_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_MUL_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_DIV_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_IDIV_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_MULADD_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_UNM_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_MIN_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_MAX_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_FLOOR_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_CEIL_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_ABS_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_DOT_VEC:
-        return IrValueKind::Float;
-    case IrCmd::LEGACY_EXTRACT_VEC:
-        return IrValueKind::Float;
-    case IrCmd::LEGACY_FLOAT_TO_VEC:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_TAG_VECTOR:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_UNTAG_VECTOR:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_BUFFER_READVECTOR:
-        return IrValueKind::Tvalue;
-    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
-        return IrValueKind::None;
     case IrCmd::NOP:
         return IrValueKind::None;
     case IrCmd::LOAD_TAG:
@@ -1155,7 +1113,6 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
             substitute(function, inst, OP_A(inst));
         }
         break;
-    case IrCmd::LEGACY_SELECT_VEC:
     case IrCmd::SELECT_VEC:
         if (OP_A(inst) == OP_B(inst))
         {
@@ -2005,7 +1962,7 @@ std::optional<uint8_t> tryGetOperandTag(IrFunction& function, IrOp op)
 {
     if (IrInst* arg = function.asInstOp(op))
     {
-        if (arg->cmd == IrCmd::TAG_VECTOR || arg->cmd == IrCmd::LEGACY_TAG_VECTOR)
+        if (arg->cmd == IrCmd::TAG_VECTOR)
             return LUA_TVECTOR;
 
         if (arg->cmd == IrCmd::LOAD_TVALUE && HAS_OP_C(*arg))

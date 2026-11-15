@@ -31,6 +31,7 @@ static bool isUnsafeToSink(IrCmd cmd)
     case IrCmd::LOAD_INT:
     case IrCmd::LOAD_FLOAT:
     case IrCmd::LOAD_TVALUE:
+    case IrCmd::LOAD_VEC:
 
     // Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
     case IrCmd::BUFFER_READI8:
@@ -41,11 +42,12 @@ static bool isUnsafeToSink(IrCmd cmd)
     case IrCmd::BUFFER_READI64:
     case IrCmd::BUFFER_READF32:
     case IrCmd::BUFFER_READF64:
-    case IrCmd::LEGACY_BUFFER_READVECTOR:
+    case IrCmd::BUFFER_READVECTOR:
     case IrCmd::BUFFER_READF32X4:
 
     // Upvalue read: SET_UPVALUE to the same upvalue slot
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
 
     // Reads table array metadata: TABLE_SETNUM can grow the array and change the length
     case IrCmd::TABLE_LEN:
@@ -138,8 +140,10 @@ struct RemoveDeadStoreState
             if (kind == IrValueKind::Unknown)
                 return;
             break;
-        case IrCmd::LEGACY_STORE_VECTOR:
-            return; // multi-component, not useful as a single-value restore hint
+        case IrCmd::STORE_VEC:
+            value = OP_B(storeInst);
+            kind = IrValueKind::Vector;
+            break;
         default:
             return;
         }
@@ -420,7 +424,7 @@ struct RemoveDeadStoreState
                         IrInst& store = function.instructions[regInfo.tvalueInstIdx];
                         CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
                         CODEGEN_ASSERT(
-                            store.cmd == IrCmd::STORE_SPLIT_TVALUE || store.cmd == IrCmd::STORE_TVALUE || store.cmd == IrCmd::LEGACY_STORE_VECTOR ||
+                            store.cmd == IrCmd::STORE_SPLIT_TVALUE || store.cmd == IrCmd::STORE_TVALUE || store.cmd == IrCmd::STORE_VEC ||
                             (store.cmd == IrCmd::STORE_TAG && function.tagOp(OP_B(store)) == LUA_TNIL)
                         );
 
@@ -690,19 +694,8 @@ static bool tryReplaceTagWithFullStore(
         {
             IrInst& prevValueInst = function.instructions[regInfo.valueInstIdx];
 
-            if (prevValueInst.cmd == IrCmd::LEGACY_STORE_VECTOR)
-            {
-                CODEGEN_ASSERT(!HAS_OP_E(prevValueInst));
-                IrOp prevValueX = OP_B(prevValueInst);
-                IrOp prevValueY = OP_C(prevValueInst);
-                IrOp prevValueZ = OP_D(prevValueInst);
-                replace(function, block, instIndex, IrInst{IrCmd::LEGACY_STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
-            }
-            else
-            {
-                IrOp prevValueOp = OP_B(prevValueInst);
-                replace(function, block, instIndex, IrInst{IrCmd::STORE_SPLIT_TVALUE, {targetOp, tagOp, prevValueOp}});
-            }
+            IrOp prevValueOp = OP_B(prevValueInst);
+            replace(function, block, instIndex, IrInst{IrCmd::STORE_SPLIT_TVALUE, {targetOp, tagOp, prevValueOp}});
         }
 
         state.killTagAndValueStorePair(regInfo);
@@ -729,27 +722,6 @@ static bool tryReplaceTagWithFullStore(
             {
                 IrOp prevValueOp = OP_C(prev);
                 replace(function, block, instIndex, IrInst{IrCmd::STORE_SPLIT_TVALUE, {targetOp, tagOp, prevValueOp}});
-            }
-
-            CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
-            state.killTValueStore(regInfo);
-
-            regInfo.tvalueInstIdx = instIndex;
-            regInfo.maybeGco = isGCO(tag);
-            regInfo.knownTag = tag;
-            regInfo.tagSourceInstIdx = ~0u;
-            state.hasGcoToClear |= regInfo.maybeGco;
-            return true;
-        }
-        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
-        {
-            // If the 'nil' is stored, we keep 'STORE_TAG Rn, tnil' as it writes the 'full' TValue
-            if (tag != LUA_TNIL)
-            {
-                IrOp prevValueX = OP_B(prev);
-                IrOp prevValueY = OP_C(prev);
-                IrOp prevValueZ = OP_D(prev);
-                replace(function, block, instIndex, IrInst{IrCmd::LEGACY_STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
             }
 
             CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
@@ -813,110 +785,13 @@ static bool tryReplaceValueWithFullStore(
             regInfo.tvalueInstIdx = instIndex;
             return true;
         }
-        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
-        {
-            IrOp prevTagOp = OP_E(prev);
-            CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
-            uint8_t prevTag = function.tagOp(prevTagOp);
-
-            CODEGEN_ASSERT(regInfo.knownTag == prevTag);
-            replace(function, block, instIndex, IrInst{IrCmd::STORE_SPLIT_TVALUE, {targetOp, prevTagOp, valueOp}});
-
-            CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
-            state.killTValueStore(regInfo);
-
-            regInfo.tvalueInstIdx = instIndex;
-            return true;
-        }
-        else if (prev.cmd == IrCmd::STORE_TVALUE && regInfo.knownTag != kUnknownTag && regInfo.tagInstIdx == kInvalidInstIdx)
+        else if (
+            (prev.cmd == IrCmd::STORE_TVALUE || prev.cmd == IrCmd::STORE_VEC) && regInfo.knownTag != kUnknownTag &&
+            regInfo.tagInstIdx == kInvalidInstIdx
+        )
         {
             IrOp prevTagOp = build.constTag(regInfo.knownTag);
             replace(function, block, instIndex, IrInst{IrCmd::STORE_SPLIT_TVALUE, {targetOp, prevTagOp, valueOp}});
-
-            CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
-            state.killTValueStore(regInfo);
-
-            regInfo.tvalueInstIdx = instIndex;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool tryReplaceVectorValueWithFullStore(
-    RemoveDeadStoreState& state,
-    IrBuilder& build,
-    IrFunction& function,
-    IrBlock& block,
-    uint32_t instIndex,
-    StoreRegInfo& regInfo
-)
-{
-    // If the tag+value pair is established, we can mark both as dead and use a single split TValue store
-    if (regInfo.tagInstIdx != ~0u && regInfo.valueInstIdx != ~0u)
-    {
-        IrOp prevTagOp = OP_B(function.instructions[regInfo.tagInstIdx]);
-        uint8_t prevTag = function.tagOp(prevTagOp);
-
-        CODEGEN_ASSERT(regInfo.knownTag == prevTag);
-
-        IrInst& storeInst = function.instructions[instIndex];
-        CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
-
-        if (!HAS_OP_E(storeInst))
-            storeInst.ops.push_back({});
-
-        replace(function, OP_E(storeInst), prevTagOp);
-
-        state.killTagAndValueStorePair(regInfo);
-
-        regInfo.tvalueInstIdx = instIndex;
-        return true;
-    }
-
-    // We can also replace a dead split TValue store with a new one, while keeping the value the same
-    if (regInfo.tvalueInstIdx != ~0u)
-    {
-        IrInst& prev = function.instructions[regInfo.tvalueInstIdx];
-
-        if (prev.cmd == IrCmd::STORE_SPLIT_TVALUE)
-        {
-            IrOp prevTagOp = OP_B(prev);
-            uint8_t prevTag = function.tagOp(prevTagOp);
-
-            CODEGEN_ASSERT(regInfo.knownTag == prevTag);
-            CODEGEN_ASSERT(!HAS_OP_D(prev));
-
-            IrInst& storeInst = function.instructions[instIndex];
-            CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
-
-            if (!HAS_OP_E(storeInst))
-                storeInst.ops.push_back({});
-
-            replace(function, OP_E(storeInst), prevTagOp);
-
-            CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
-            state.killTValueStore(regInfo);
-
-            regInfo.tvalueInstIdx = instIndex;
-            return true;
-        }
-        else if (prev.cmd == IrCmd::LEGACY_STORE_VECTOR)
-        {
-            IrOp prevTagOp = OP_E(prev);
-            CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
-            uint8_t prevTag = function.tagOp(prevTagOp);
-
-            CODEGEN_ASSERT(regInfo.knownTag == prevTag);
-
-            IrInst& storeInst = function.instructions[instIndex];
-            CODEGEN_ASSERT(storeInst.cmd == IrCmd::LEGACY_STORE_VECTOR);
-
-            if (!HAS_OP_E(storeInst))
-                storeInst.ops.push_back({});
-
-            replace(function, OP_E(storeInst), prevTagOp);
 
             CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
             state.killTValueStore(regInfo);
@@ -1073,33 +948,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.maybeGco = false;
         }
         break;
-    case IrCmd::LEGACY_STORE_VECTOR:
-        if (OP_A(inst).kind == IrOpKind::VmReg)
-        {
-            int reg = vmRegOp(OP_A(inst));
-
-            if (function.cfg.captured.regs.test(reg))
-                return;
-
-            StoreRegInfo& regInfo = state.info[reg];
-
-            regInfo.ignoreAtExit = false;
-
-            if (tryReplaceVectorValueWithFullStore(state, build, function, block, index, regInfo))
-                break;
-
-            // Partial value store can be removed by a new one if the tag is known
-            if (regInfo.knownTag != kUnknownTag)
-                state.killValueStore(regInfo);
-
-            regInfo.valueInstIdx = index;
-
-            if (state.tagValuePairEstablished(regInfo))
-                regInfo.tvalueInstIdx = kInvalidInstIdx;
-
-            regInfo.maybeGco = false;
-        }
-        break;
+    case IrCmd::STORE_VEC:
     case IrCmd::STORE_TVALUE:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -1120,7 +969,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.tvalueInstIdx = index;
 
-            regInfo.knownTag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
+            regInfo.knownTag = inst.cmd == IrCmd::STORE_VEC ? LUA_TVECTOR : tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
             regInfo.tagSourceInstIdx = ~0u;
             regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag);
 
@@ -1455,7 +1304,7 @@ static void markDeadStoresInBlockChain(
                 case IrCmd::BUFFER_WRITEI64:
                 case IrCmd::BUFFER_WRITEF32:
                 case IrCmd::BUFFER_WRITEF64:
-                case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+                case IrCmd::BUFFER_WRITEVECTOR:
                 case IrCmd::BUFFER_WRITEF32X4:
                     state.remainingUses[OP_A(inst).index]--;
 
@@ -1487,7 +1336,7 @@ static void markDeadStoresInBlockChain(
                     case IrCmd::BUFFER_WRITEI64:
                     case IrCmd::BUFFER_WRITEF32:
                     case IrCmd::BUFFER_WRITEF64:
-                    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+                    case IrCmd::BUFFER_WRITEVECTOR:
                     case IrCmd::BUFFER_WRITEF32X4:
                         if (state.remainingUses[OP_A(inst).index] == 0)
                         {
@@ -1674,14 +1523,16 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
             {
                 if (const uint32_t* newIndex = instRedir.find(op.index))
                     op.index = *newIndex;
-                else if (std::find_if(
-                             inputs.begin(),
-                             inputs.end(),
-                             [op](auto& el)
-                             {
-                                 return el.first == op;
-                             }
-                         ) == inputs.end())
+                else if (
+                    std::find_if(
+                        inputs.begin(),
+                        inputs.end(),
+                        [op](auto& el)
+                        {
+                            return el.first == op;
+                        }
+                    ) == inputs.end()
+                )
                     CODEGEN_ASSERT(!"Values can only be used if they are defined in the same block or be an input");
             }
         };

@@ -62,7 +62,6 @@ struct IrLoweringX64
     OperandX64 memRegTagOp(IrOp op);
     RegisterX64 regOp(IrOp op);
     OperandX64 bufferAddrOp(IrOp bufferOp, IrOp indexOp, uint8_t tag);
-    RegisterX64 legacyVecOp(IrOp op, ScopedRegX64& tmp);
     RegisterX64 rawVectorRegOp(IrOp op);
     RegisterX64 numericVectorRegOp(IrOp op);
 

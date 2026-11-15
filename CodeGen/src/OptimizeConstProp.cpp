@@ -484,18 +484,29 @@ struct ConstPropState
         return std::make_pair(IrCmd::NOP, kInvalidInstIdx);
     }
 
-    // Find existing value of the instruction that is exactly the same, or record current on for future lookups
+    // Find a live common value or record the current instruction without a separate lookup.
+    uint32_t findOrRecordInst(const IrInst& key, uint32_t instIdx)
+    {
+        auto [previous, inserted] = valueMap.try_insert(key, instIdx);
+        if (!inserted)
+        {
+            IrInst& value = function.instructions[previous];
+            if (value.useCount != 0 || hasSideEffects(value.cmd))
+                return previous;
+
+            // A previous value may have been removed as unused.
+            previous = instIdx;
+        }
+        return kInvalidInstIdx;
+    }
+
+    // Find an existing value of the instruction that is exactly the same, or record the current one for future lookups.
     void substituteOrRecord(IrInst& inst, uint32_t instIdx)
     {
         CODEGEN_ASSERT(inst.cmd != IrCmd::SUBSTITUTE);
 
-        if (uint32_t* prevIdx = getPreviousInstIndex(inst))
-        {
-            substitute(function, inst, IrOp{IrOpKind::Inst, *prevIdx});
-            return;
-        }
-
-        valueMap[inst] = instIdx;
+        if (uint32_t previous = findOrRecordInst(inst, instIdx); previous != kInvalidInstIdx)
+            substitute(function, inst, IrOp{IrOpKind::Inst, previous});
     }
 
     // VM register load can be replaced by a previous load of the same version of the register
@@ -512,23 +523,19 @@ struct ConstPropState
         IrInst versionedLoad = loadInst.cmd == IrCmd::LOAD_FLOAT ? versionedVmRegLoad(loadInst.cmd, OP_A(loadInst), OPT_OP_B(loadInst))
                                                                  : versionedVmRegLoad(loadInst.cmd, OP_A(loadInst));
 
-        // Check if there is a value that already has this version of the register
-        if (uint32_t* prevIdx = getPreviousInstIndex(versionedLoad))
+        // Check if there is a value that already has this version of the register, or record this load.
+        uint32_t instIdx = function.getInstIndex(loadInst);
+        if (uint32_t previous = findOrRecordInst(versionedLoad, instIdx); previous != kInvalidInstIdx)
         {
             // Previous value might not be linked to a register yet
             // For example, it could be a NEW_TABLE stored into a register and we might need to track guards made with this value
-            if (!instLink.contains(*prevIdx))
-                createRegLink(*prevIdx, OP_A(loadInst));
+            if (!instLink.contains(previous))
+                createRegLink(previous, OP_A(loadInst));
 
             // Substitute load instruction with the previous value
-            substitute(function, loadInst, IrOp{IrOpKind::Inst, *prevIdx});
+            substitute(function, loadInst, IrOp{IrOpKind::Inst, previous});
             return true;
         }
-
-        uint32_t instIdx = function.getInstIndex(loadInst);
-
-        // Record load of this register version for future substitution
-        valueMap[versionedLoad] = instIdx;
 
         createRegLink(instIdx, OP_A(loadInst));
         return false;
@@ -574,6 +581,18 @@ struct ConstPropState
 
         if (loadCmd != IrCmd::NOP)
             valueMap[versionedVmRegLoad(loadCmd, OP_A(storeInst))] = OP_C(storeInst).index;
+    }
+
+    void trackVectorStore(IrInst& inst)
+    {
+        CODEGEN_ASSERT(OP_A(inst).kind == IrOpKind::VmReg);
+        invalidate(OP_A(inst));
+        saveTag(OP_A(inst), LUA_TVECTOR);
+
+        // Semantic vectors cannot alias packed TValue values: packing changes
+        // the fourth lane. Keep their forwarding in a separate versioned entry.
+        if (!function.cfg.captured.regs.test(vmRegOp(OP_A(inst))))
+            valueMap[versionedVmRegLoad(IrCmd::LOAD_VEC, OP_A(inst))] = OP_B(inst).index;
     }
 
     // When loading from a VM register, there might be an instruction that has loaded the whole TValue
@@ -676,11 +695,11 @@ struct ConstPropState
         return IrInst{loadInst.cmd, {op}};
     }
 
-    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst)
+    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst, IrOp upvalue)
     {
-        CODEGEN_ASSERT(OP_A(loadInst).kind == IrOpKind::VmUpvalue);
+        CODEGEN_ASSERT(upvalue.kind == IrOpKind::VmUpvalue);
 
-        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(OP_A(loadInst))))
+        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(upvalue)))
         {
             if (*prevIdx != kInvalidInstIdx)
             {
@@ -693,7 +712,7 @@ struct ConstPropState
         uint32_t instIdx = function.getInstIndex(loadInst);
 
         // Record load of this upvalue for future substitution
-        upvalueMap[vmUpvalueOp(OP_A(loadInst))] = instIdx;
+        upvalueMap[vmUpvalueOp(upvalue)] = instIdx;
         return false;
     }
 
@@ -701,43 +720,6 @@ struct ConstPropState
     {
         // Future loads of this upvalue version can use the value we stored
         upvalueMap[vmUpvalueOp(OP_A(storeInst))] = OP_B(storeInst).index;
-    }
-
-    // For a LOAD_FLOAT operation, it is possible to find an operand from a previous STORE_VECTOR instruction
-    std::optional<IrOp> findSubstituteComponentLoadFromStoreVector(IrBuilder& build, IrOp vmReg, int offset)
-    {
-        IrInst versionedLoad = versionedVmRegLoad(IrCmd::LOAD_FLOAT, vmReg);
-
-        // Check if there is a value that already has this version of the register
-        if (uint32_t* prevIdx = getPreviousInstIndex(versionedLoad))
-        {
-            IrInst& store = function.instructions[*prevIdx];
-            CODEGEN_ASSERT(store.cmd == IrCmd::LEGACY_STORE_VECTOR);
-
-            IrOp argOp;
-
-            if (offset == 0)
-                argOp = OP_B(store);
-            else if (offset == 4)
-                argOp = OP_C(store);
-            else if (offset == 8)
-                argOp = OP_D(store);
-
-            if (IrInst* arg = function.asInstOp(argOp))
-            {
-                // Argument can only be re-used if it contains the value of the same precision
-                if (arg->cmd == IrCmd::LOAD_FLOAT || arg->cmd == IrCmd::BUFFER_READF32 || arg->cmd == IrCmd::NUM_TO_FLOAT ||
-                    arg->cmd == IrCmd::UINT_TO_FLOAT)
-                    return argOp;
-            }
-            else if (argOp.kind == IrOpKind::Constant)
-            {
-                // Constant can be used if we bring it down to correct precision
-                return build.constDouble(float(function.doubleOp(argOp)));
-            }
-        }
-
-        return {};
     }
 
     // When we extract a chain of buffer access offsets, we want to keep the values small enough to fit in arm64 12 bit immediates
@@ -953,6 +935,8 @@ struct ConstPropState
                     component = OP_B(addrInst);
                 else if (offset == 16)
                     component = OP_C(addrInst);
+                else if (offset == 24 && HAS_OP_D(addrInst))
+                    component = OP_D(addrInst);
 
                 if (component.kind != IrOpKind::None)
                 {
@@ -1688,10 +1672,23 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::LOAD_FLOAT:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
-            if (std::optional<IrOp> subst = state.findSubstituteComponentLoadFromStoreVector(build, OP_A(inst), function.intOp(OP_B(inst))))
+            // A semantic vector exposes only its active component lanes.
+            // Do not treat its source as a packed TValue or forward the tag lane.
+            int offset = function.intOp(OP_B(inst));
+            if (offset >= 0 && offset < LUA_VECTOR_SIZE * int(sizeof(float)) && offset % int(sizeof(float)) == 0)
             {
-                substitute(function, inst, *subst);
-                break;
+                if (uint32_t* value = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_VEC, OP_A(inst)))
+                {
+                    IrInst& source = function.instructions[*value];
+                    if (source.cmd == IrCmd::BUILD_VEC)
+                        substitute(function, inst, getOp(source, offset / 4));
+                    else
+                    {
+                        replace(function, block, index, {IrCmd::EXTRACT_VEC, {IrOp{IrOpKind::Inst, *value}, build.constInt(offset / 4)}});
+                        state.substituteOrRecord(inst, index);
+                    }
+                    break;
+                }
             }
 
             // There could be a whole TValue that we can extract a field from
@@ -1701,7 +1698,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 IrInst& prev = function.instructions[prevIdx];
 
                 // Unpack the STORE_TVALUE of a TAG_VECTOR value
-                if (prev.cmd == IrCmd::LEGACY_TAG_VECTOR)
+                if (prev.cmd == IrCmd::TAG_VECTOR)
                 {
                     if (function.asInstOp(OP_A(prev)))
                         prevIdx = OP_A(prev).index;
@@ -1727,33 +1724,61 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                         break;
                     }
                 }
-                else if (value.cmd == IrCmd::LOAD_TVALUE && OP_A(value).kind == IrOpKind::VmReg)
+
+                if (value.cmd == IrCmd::BUILD_VEC)
+                    substitute(function, inst, getOp(value, component));
+                else
                 {
-                    // We were able to match "LOAD_FLOAT Rx" to a previous "STORE_TVALUE Rx, %n" where "%n = LOAD_TVALUE Ry"
-                    // But we still have to check that %n represents the current version of Ry
-                    if (state.tryGetRegLink(IrOp{IrOpKind::Inst, prevIdx}) != nullptr)
-                    {
-                        if (std::optional<IrOp> subst =
-                                state.findSubstituteComponentLoadFromStoreVector(build, OP_A(value), function.intOp(OP_B(inst))))
-                        {
-                            substitute(function, inst, *subst);
-                            break;
-                        }
-                    }
+                    replace(function, block, index, IrInst{IrCmd::EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
+                    state.substituteOrRecord(inst, index);
                 }
-
-                replace(function, block, index, IrInst{IrCmd::LEGACY_EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
-
-                state.substituteOrRecord(inst, index);
                 break;
             }
 
             state.substituteOrRecordVmRegLoad(inst);
         }
         break;
+    case IrCmd::LOAD_VEC:
+        if (OP_A(inst).kind == IrOpKind::VmReg)
+        {
+            IrOp reg = OP_A(inst);
+            if (uint32_t* value = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_VEC, reg))
+                substitute(function, inst, IrOp{IrOpKind::Inst, *value});
+            else if (uint32_t* packed = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, reg))
+            {
+                IrInst& source = function.instructions[*packed];
+                if (source.cmd == IrCmd::TAG_VECTOR)
+                {
+                    IrOp payload = OP_A(source);
+                    substitute(function, inst, payload);
+                    state.valueMap[state.versionedVmRegLoad(IrCmd::LOAD_VEC, reg)] = payload.index;
+                }
+                else
+                {
+                    replace(function, block, index, {IrCmd::TVALUE_TO_VEC, {IrOp{IrOpKind::Inst, *packed}}});
+                    state.valueMap[state.versionedVmRegLoad(IrCmd::LOAD_VEC, reg)] = index;
+                }
+            }
+            else
+                state.substituteOrRecordVmRegLoad(inst);
+        }
+        break;
     case IrCmd::LOAD_TVALUE:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
+            // Only materialize a packed value if a generic TValue consumer needs it.
+            // Typed vector consumers use the payload; component reads use EXTRACT_VEC.
+            if (!state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(inst)))
+            {
+                if (uint32_t* value = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_VEC, OP_A(inst)))
+                {
+                    IrOp reg = OP_A(inst);
+                    replace(function, block, index, {IrCmd::TAG_VECTOR, {IrOp{IrOpKind::Inst, *value}}});
+                    state.valueMap[state.versionedVmRegLoad(IrCmd::LOAD_TVALUE, reg)] = index;
+                    break;
+                }
+            }
+
             if (!state.substituteOrRecordVmRegLoad(inst) && !HAS_OP_C(inst))
             {
                 // Provide information about what kind of tag is being loaded, this helps dead store elimination later
@@ -1763,7 +1788,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         else if (IrInst* source = function.asInstOp(OP_A(inst)))
         {
-            if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
+            if (source->cmd == IrCmd::GET_UPVALUE_ADDR && (!HAS_OP_B(inst) || function.intOp(OP_B(inst)) == 0))
+            {
+                state.substituteOrRecordVmUpvalueLoad(inst, OP_A(*source));
+            }
+            else if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
             {
                 uint32_t* prevIdx = state.hashValueCache.find(OP_A(inst).index);
 
@@ -1882,6 +1911,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         break;
     case IrCmd::STORE_EXTRA:
+        // In T16 the extra field overlaps Z. A previously stored semantic vector
+        // is no longer available after this partial write.
+        if (state.getPreviousVersionedLoadIndex(IrCmd::LOAD_VEC, OP_A(inst)))
+            state.invalidateValue(OP_A(inst));
         break;
     case IrCmd::STORE_POINTER:
         if (OP_A(inst).kind == IrOpKind::VmReg)
@@ -1983,21 +2016,24 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             }
         }
         break;
-    case IrCmd::LEGACY_STORE_VECTOR:
-        state.invalidateValue(OP_A(inst));
-
-        // To avoid captured register invalidation tracking in lowering later, values from loads from captured registers are not propagated
-        if (!function.cfg.captured.regs.test(vmRegOp(OP_A(inst))))
-        {
-            // This is different from how other stores use 'forwardVmRegStoreToLoad'
-            // Instead of mapping a store to a load directly, we map a LOAD_FLOAT without a specific offset to the the store instruction itself
-            // LOAD_FLOAT will have special path to look up this store and apply additional checks to make sure the argument reuse is valid
-            // One of the restrictions is that STORE_VECTOR converts double to float, so reusing the source is only possible if it comes from a float
-            // The register versioning rules will stay the same and follow the correct invalidation
-            state.valueMap[state.versionedVmRegLoad(IrCmd::LOAD_FLOAT, OP_A(inst))] = index;
-        }
+    case IrCmd::STORE_VEC_COMPONENTS:
+        CODEGEN_ASSERT(!"Component stores are selected after semantic optimizations");
+        break;
+    case IrCmd::STORE_VEC:
+        state.trackVectorStore(inst);
         break;
     case IrCmd::STORE_TVALUE:
+        if (OP_A(inst).kind == IrOpKind::VmReg)
+        {
+            // A copied vector result still has semantic components. Generic
+            // copies loaded from memory retain the packed LOAD/STORE_TVALUE path.
+            if (IrInst* value = function.asInstOp(OP_B(inst)); value && value->cmd == IrCmd::TAG_VECTOR)
+            {
+                replace(function, block, index, {IrCmd::STORE_VEC, {OP_A(inst), OP_A(value)}});
+                state.trackVectorStore(inst);
+                break;
+            }
+        }
         if (OP_A(inst).kind == IrOpKind::VmReg || OP_A(inst).kind == IrOpKind::Inst)
         {
             if (OP_A(inst).kind == IrOpKind::VmReg)
@@ -2062,15 +2098,22 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (tag == LUA_TBOOLEAN &&
                 (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TNUMBER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
+            else if (
+                tag == LUA_TNUMBER &&
+                (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double))
+            )
                 canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
 
             if (canSplitTvalueStore)
             {
-                if (HAS_OP_C(inst))
+                // A VM-register STORE_TVALUE may carry an explicit zero offset
+                // solely so that its optional tag can occupy operand D.  The
+                // split form has the tag in B and must not retain that dummy
+                // offset: dead-store elimination treats register destinations
+                // as whole-register stores.
+                if (HAS_OP_C(inst) && OP_A(inst).kind != IrOpKind::VmReg)
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value, OP_C(inst)}});
                 else
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value}});
@@ -2258,7 +2301,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     }
     case IrCmd::GET_UPVALUE:
-        state.substituteOrRecordVmUpvalueLoad(inst);
+        state.substituteOrRecordVmUpvalueLoad(inst, OP_A(inst));
+        break;
+    case IrCmd::GET_UPVALUE_ADDR:
         break;
     case IrCmd::SET_UPVALUE:
         state.forwardVmUpvalueStoreToLoad(inst);
@@ -2267,6 +2312,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             replace(function, OP_C(inst), build.constTag(tag));
         }
+
+        // Only the GC barrier needs the source value to remain in its VM register.
+        if (HAS_OP_D(inst) && OP_C(inst).kind == IrOpKind::Constant && !isGCO(function.tagOp(OP_C(inst))))
+            replace(function, OP_D(inst), IrOp{});
         break;
     case IrCmd::CHECK_TAG:
     {
@@ -2525,9 +2574,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::BUFFER_WRITEI64:
         state.forwardBufferStoreToLoad(inst, IrCmd::BUFFER_READI64, 8);
         break;
-    case IrCmd::LEGACY_BUFFER_READVECTOR:
+    case IrCmd::BUFFER_READVECTOR:
         break;
-    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
+    case IrCmd::BUFFER_WRITEVECTOR:
         CODEGEN_ASSERT(OP_E(inst).kind == IrOpKind::Constant);
         state.invalidateBufferRange(
             inst, uint8_t(function.intOp(OP_E(inst)) * sizeof(float)), function.tagOp(OP_D(inst)), function.asIntOp(OP_B(inst)));
@@ -2734,9 +2783,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SIGN_NUM:
     case IrCmd::SELECT_NUM:
     case IrCmd::SELECT_INT64:
-    case IrCmd::LEGACY_SELECT_VEC:
-    case IrCmd::LEGACY_MULADD_VEC:
-    case IrCmd::LEGACY_EXTRACT_VEC:
+    case IrCmd::SELECT_VEC:
+    case IrCmd::MULADD_VEC:
     case IrCmd::NOT_ANY:
         state.substituteOrRecord(inst, index);
         break;
@@ -3195,52 +3243,69 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.checkSlotMatchCache.push_back({index, true});
         break;
 
-    case IrCmd::LEGACY_ADD_VEC:
-    case IrCmd::LEGACY_SUB_VEC:
-    case IrCmd::LEGACY_MUL_VEC:
-    case IrCmd::LEGACY_DIV_VEC:
-    case IrCmd::LEGACY_IDIV_VEC:
-    case IrCmd::LEGACY_MIN_VEC:
-    case IrCmd::LEGACY_MAX_VEC:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
-            replace(function, OP_A(inst), OP_A(a));
-
-        if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::LEGACY_TAG_VECTOR)
-            replace(function, OP_B(inst), OP_A(b));
-
+    case IrCmd::ADD_VEC:
+    case IrCmd::SUB_VEC:
+    case IrCmd::MUL_VEC:
+    case IrCmd::DIV_VEC:
+    case IrCmd::IDIV_VEC:
+    case IrCmd::MIN_VEC:
+    case IrCmd::MAX_VEC:
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::LEGACY_DOT_VEC:
-        if (!FFlag::LuauCodegenMultiLaneDot || function.intOp(OP_C(inst)) == 3)
+    case IrCmd::DOT_VEC:
+        // In the four-wide inline layout the tag is separate, so TAG_VECTOR
+        // leaves all four component bits unchanged. For a packed TValue,
+        // strip it only when the dot ignores the fourth lane.
+        if ((LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0) || !FFlag::LuauCodegenMultiLaneDot || function.intOp(OP_C(inst)) == 3)
         {
-            if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
+            if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::TAG_VECTOR)
                 replace(function, OP_A(inst), OP_A(a));
 
-            if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::LEGACY_TAG_VECTOR)
+            if (IrInst* b = function.asInstOp(OP_B(inst)); b && b->cmd == IrCmd::TAG_VECTOR)
                 replace(function, OP_B(inst), OP_A(b));
         }
 
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::LEGACY_UNM_VEC:
-    case IrCmd::LEGACY_FLOOR_VEC:
-    case IrCmd::LEGACY_CEIL_VEC:
-    case IrCmd::LEGACY_ABS_VEC:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_TAG_VECTOR)
-            replace(function, OP_A(inst), OP_A(a));
-
+    case IrCmd::UNM_VEC:
+    case IrCmd::FLOOR_VEC:
+    case IrCmd::CEIL_VEC:
+    case IrCmd::ABS_VEC:
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::LEGACY_FLOAT_TO_VEC:
-    case IrCmd::LEGACY_TAG_VECTOR:
+    case IrCmd::TVALUE_TO_VEC:
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::TAG_VECTOR)
+            substitute(function, inst, OP_A(source));
+        else
+            state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::TAG_VECTOR:
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::TVALUE_TO_VEC)
+            substitute(function, inst, OP_A(source));
+        else
+            state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::BUILD_VEC:
+        for (IrOp& component : inst.ops)
+            if (std::optional<double> value = function.asDoubleOp(component))
+                replace(function, component, build.constDouble(float(*value)));
+        state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::EXTRACT_VEC:
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::BUILD_VEC)
+            substitute(function, inst, getOp(*source, function.intOp(OP_B(inst))));
+        else
+            state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::FLOAT_TO_VEC:
         state.substituteOrRecord(inst, index);
         break;
 
-    case IrCmd::LEGACY_UNTAG_VECTOR:
-        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::LEGACY_UNTAG_VECTOR)
+    case IrCmd::UNTAG_VECTOR:
+        if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::UNTAG_VECTOR)
             substitute(function, inst, OP_A(inst));
         else
             state.substituteOrRecord(inst, index);

@@ -98,48 +98,6 @@ const char* getCmdName(IrCmd cmd)
 {
     switch (cmd)
     {
-    case IrCmd::LEGACY_STORE_VECTOR:
-        return "STORE_VECTOR";
-    case IrCmd::LEGACY_SELECT_VEC:
-        return "SELECT_VEC";
-    case IrCmd::LEGACY_ADD_VEC:
-        return "ADD_VEC";
-    case IrCmd::LEGACY_SUB_VEC:
-        return "SUB_VEC";
-    case IrCmd::LEGACY_MUL_VEC:
-        return "MUL_VEC";
-    case IrCmd::LEGACY_DIV_VEC:
-        return "DIV_VEC";
-    case IrCmd::LEGACY_IDIV_VEC:
-        return "IDIV_VEC";
-    case IrCmd::LEGACY_MULADD_VEC:
-        return "MULADD_VEC";
-    case IrCmd::LEGACY_UNM_VEC:
-        return "UNM_VEC";
-    case IrCmd::LEGACY_MIN_VEC:
-        return "MIN_VEC";
-    case IrCmd::LEGACY_MAX_VEC:
-        return "MAX_VEC";
-    case IrCmd::LEGACY_FLOOR_VEC:
-        return "FLOOR_VEC";
-    case IrCmd::LEGACY_CEIL_VEC:
-        return "CEIL_VEC";
-    case IrCmd::LEGACY_ABS_VEC:
-        return "ABS_VEC";
-    case IrCmd::LEGACY_DOT_VEC:
-        return "DOT_VEC";
-    case IrCmd::LEGACY_EXTRACT_VEC:
-        return "EXTRACT_VEC";
-    case IrCmd::LEGACY_FLOAT_TO_VEC:
-        return "FLOAT_TO_VEC";
-    case IrCmd::LEGACY_TAG_VECTOR:
-        return "TAG_VECTOR";
-    case IrCmd::LEGACY_UNTAG_VECTOR:
-        return "UNTAG_VECTOR";
-    case IrCmd::LEGACY_BUFFER_READVECTOR:
-        return "BUFFER_READVECTOR";
-    case IrCmd::LEGACY_BUFFER_WRITEVECTOR:
-        return "BUFFER_WRITEVECTOR";
     case IrCmd::NOP:
         return "NOP";
     case IrCmd::LOAD_TAG:

@@ -51,29 +51,6 @@ enum class IrCmd : uint8_t
 {
     NOP,
 
-    // Transitional packed-vector commands; removed with producer migration.
-    LEGACY_STORE_VECTOR,
-    LEGACY_SELECT_VEC,
-    LEGACY_ADD_VEC,
-    LEGACY_SUB_VEC,
-    LEGACY_MUL_VEC,
-    LEGACY_DIV_VEC,
-    LEGACY_IDIV_VEC,
-    LEGACY_MULADD_VEC,
-    LEGACY_UNM_VEC,
-    LEGACY_MIN_VEC,
-    LEGACY_MAX_VEC,
-    LEGACY_FLOOR_VEC,
-    LEGACY_CEIL_VEC,
-    LEGACY_ABS_VEC,
-    LEGACY_DOT_VEC,
-    LEGACY_EXTRACT_VEC,
-    LEGACY_FLOAT_TO_VEC,
-    LEGACY_TAG_VECTOR,
-    LEGACY_UNTAG_VECTOR,
-    LEGACY_BUFFER_READVECTOR,
-    LEGACY_BUFFER_WRITEVECTOR,
-
     // Load a tag from TValue
     // A: Rn or Kn or pointer (TValue)
     // B: int/none (optional 'A' pointer offset)

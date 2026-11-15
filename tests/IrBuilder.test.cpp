@@ -13,6 +13,13 @@
 #include <limits.h>
 
 LUAU_FASTFLAG(LuauCodegenForwardSplitStore)
+
+#if LUA_VECTOR_SIZE == 4
+static constexpr bool kVectorSize4 = true;
+#else
+static constexpr bool kVectorSize4 = false;
+#endif
+
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauCodegenCmpAnySideEffecting)
 LUAU_FASTFLAG(LuauCodegenMultiLaneDot)
@@ -27,6 +34,14 @@ public:
     IrBuilderFixture()
         : build(hooks, {})
     {
+    }
+
+    void storeVectorComponents(IrOp destination, IrOp x, IrOp y, IrOp z, IrOp w = {})
+    {
+        IrOps components{x, y, z};
+        if (kVectorSize4)
+            components.push_back(w.kind == IrOpKind::None ? build.constDouble(0.0) : w);
+        build.inst(IrCmd::STORE_VEC, destination, build.inst(IrCmd::BUILD_VEC, components));
     }
 
     void constantFold()
@@ -126,6 +141,12 @@ public:
     int tuserdata = parseTagName("tuserdata");
     int tbuffer = parseTagName("tbuffer");
 };
+
+#if LUA_VECTOR_SIZE == 4
+#define ensureVectorSize3() return
+#else
+#define ensureVectorSize3() ((void)0)
+#endif
 
 TEST_SUITE_BEGIN("Optimization");
 
@@ -1559,11 +1580,11 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "SelectVector")
 
     build.beginBlock(block);
 
-    IrOp unknownVec1 = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(1));
-    IrOp unknownVec2 = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2));
-    IrOp unknownVec3 = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(3));
+    IrOp unknownVec1 = build.inst(IrCmd::LOAD_VEC, build.vmReg(1));
+    IrOp unknownVec2 = build.inst(IrCmd::LOAD_VEC, build.vmReg(2));
+    IrOp unknownVec3 = build.inst(IrCmd::LOAD_VEC, build.vmReg(3));
 
-    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), build.inst(IrCmd::LEGACY_SELECT_VEC, unknownVec3, unknownVec3, unknownVec1, unknownVec2));
+    build.inst(IrCmd::STORE_VEC, build.vmReg(0), build.inst(IrCmd::SELECT_VEC, unknownVec3, unknownVec3, unknownVec1, unknownVec2));
 
     build.inst(IrCmd::RETURN, build.constUint(0));
 
@@ -1572,8 +1593,8 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "SelectVector")
 
     CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
 bb_0:
-   %2 = LOAD_TVALUE R3
-   STORE_TVALUE R0, %2
+   %2 = LOAD_VEC R3
+   STORE_VEC R0, %2
    RETURN 0u
 
 )");
@@ -4903,42 +4924,112 @@ bb_fallback_1:
 )");
 }
 
+TEST_CASE_FIXTURE(IrBuilderFixture, "SemanticVectorStoreForwarding")
+{
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    IrOp a = build.inst(IrCmd::LOAD_VEC, build.vmReg(0));
+    IrOp b = build.inst(IrCmd::LOAD_VEC, build.vmReg(1));
+    IrOp sum = build.inst(IrCmd::ADD_VEC, a, b);
+    build.inst(IrCmd::STORE_VEC, build.vmReg(2), sum);
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(2));
+    IrOp check = build.inst(IrCmd::CHECK_TAG, tag, build.constTag(tvector), build.vmExit(0));
+    IrOp packed = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2));
+    IrOp copy = build.inst(IrCmd::STORE_TVALUE, build.vmReg(3), packed);
+    IrOp selected =
+        build.inst(IrCmd::SELECT_IF_TRUTHY, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(6)), packed, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(7)));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(8), selected);
+    IrOp payload = build.inst(IrCmd::TVALUE_TO_VEC, packed);
+    IrOp doubled = build.inst(IrCmd::ADD_VEC, payload, payload);
+    build.inst(IrCmd::STORE_VEC, build.vmReg(4), doubled);
+    IrOp component = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(2), build.constInt(4));
+    IrOp number = build.inst(IrCmd::FLOAT_TO_NUM, component);
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(5), number);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(5), build.constTag(tnumber));
+    build.inst(IrCmd::RETURN, build.vmReg(2), build.constInt(4));
+
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+
+    CHECK(isPseudo(build.function.instOp(check).cmd));
+    CHECK(build.function.instOp(packed).cmd == IrCmd::TAG_VECTOR);
+    CHECK(OP_A(build.function.instOp(packed)) == sum);
+    CHECK(build.function.instOp(copy).cmd == IrCmd::STORE_VEC);
+    CHECK(OP_B(build.function.instOp(copy)) == sum);
+    CHECK(OP_A(build.function.instOp(doubled)) == sum);
+    CHECK(OP_B(build.function.instOp(doubled)) == sum);
+    CHECK(build.function.instOp(component).cmd == IrCmd::EXTRACT_VEC);
+    CHECK(OP_A(build.function.instOp(component)) == sum);
+    CHECK(build.function.intOp(OP_B(build.function.instOp(component))) == 1);
+}
+
+TEST_CASE_FIXTURE(IrBuilderFixture, "SemanticVectorStoreInvalidation")
+{
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    IrOp a = build.inst(IrCmd::LOAD_VEC, build.vmReg(0));
+    IrOp sum = build.inst(IrCmd::ADD_VEC, a, a);
+    build.inst(IrCmd::STORE_VEC, build.vmReg(1), sum);
+    build.inst(IrCmd::STORE_EXTRA, build.vmReg(1), build.constInt(123));
+    IrOp component = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(1), build.constInt(8));
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(4), build.inst(IrCmd::FLOAT_TO_NUM, component));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(4), build.constTag(tnumber));
+
+    build.inst(IrCmd::STORE_VEC, build.vmReg(2), sum);
+    build.inst(IrCmd::CALL, build.vmReg(3), build.constInt(0), build.constInt(0));
+    IrOp afterCall = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(3), afterCall);
+    build.inst(IrCmd::RETURN, build.vmReg(3), build.constInt(1));
+
+    updateUseCounts(build.function);
+    computeCfgInfo(build.function);
+    constPropInBlockChains(build);
+
+    CHECK(build.function.instOp(component).cmd == IrCmd::LOAD_FLOAT);
+    CHECK(build.function.instOp(afterCall).cmd == IrCmd::LOAD_TVALUE);
+}
+
 TEST_CASE_FIXTURE(IrBuilderFixture, "TagVectorSkipErrorFix")
 {
     IrOp block = build.block(IrBlockKind::Internal);
-
     build.beginBlock(block);
 
-    IrOp a = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
-    IrOp b = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(1));
-
-    IrOp mul = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_MUL_VEC, a, b));
-
-    IrOp t1 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_ADD_VEC, mul, mul));
-    IrOp t2 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_SUB_VEC, mul, mul));
-
-    IrOp t3 = build.inst(IrCmd::LEGACY_TAG_VECTOR, build.inst(IrCmd::LEGACY_DIV_VEC, t1, build.inst(IrCmd::LEGACY_UNM_VEC, t2)));
-
-    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), t3);
+    // Vector arithmetic consumes semantic vectors.  A packed TAG_VECTOR
+    // result must be unpacked before it becomes another arithmetic operand.
+    auto roundTrip = [&](IrOp value)
+    {
+        return build.inst(IrCmd::TVALUE_TO_VEC, build.inst(IrCmd::TAG_VECTOR, value));
+    };
+    IrOp a = build.inst(IrCmd::LOAD_VEC, build.vmReg(0));
+    IrOp b = build.inst(IrCmd::LOAD_VEC, build.vmReg(1));
+    IrOp mul = build.inst(IrCmd::MUL_VEC, a, b);
+    IrOp packedMul = roundTrip(mul);
+    IrOp add = build.inst(IrCmd::ADD_VEC, packedMul, packedMul);
+    IrOp sub = build.inst(IrCmd::SUB_VEC, packedMul, packedMul);
+    IrOp negate = build.inst(IrCmd::UNM_VEC, roundTrip(sub));
+    IrOp divide = build.inst(IrCmd::DIV_VEC, roundTrip(add), negate);
+    IrOp store = build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), build.inst(IrCmd::TAG_VECTOR, divide));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constUint(1));
 
     updateUseCounts(build.function);
     constPropInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::Yes) == R"(
-bb_0:                                                       ; useCount: 0
-   %0 = LOAD_TVALUE R0                                       ; useCount: 1, lastUse: %0
-   %1 = LOAD_TVALUE R1                                       ; useCount: 1, lastUse: %0
-   %2 = MUL_VEC %0, %1                                       ; useCount: 4, lastUse: %0
-   %4 = ADD_VEC %2, %2                                       ; useCount: 1, lastUse: %0
-   %6 = SUB_VEC %2, %2                                       ; useCount: 1, lastUse: %0
-   %8 = UNM_VEC %6                                           ; useCount: 1, lastUse: %0
-   %9 = DIV_VEC %4, %8                                       ; useCount: 1, lastUse: %0
-   %10 = TAG_VECTOR %9                                       ; useCount: 1, lastUse: %0
-   STORE_TVALUE R0, %10                                      ; %11
-   RETURN R0, 1u                                             ; %12
-
-)");
+    // Simplifying packing must retain the shared producer and both distinct
+    // arithmetic chains, including the final semantic vector store.
+    CHECK(OP_A(build.function.instOp(add)) == mul);
+    CHECK(OP_B(build.function.instOp(add)) == mul);
+    CHECK(OP_A(build.function.instOp(sub)) == mul);
+    CHECK(OP_B(build.function.instOp(sub)) == mul);
+    CHECK(OP_A(build.function.instOp(negate)) == sub);
+    CHECK(OP_A(build.function.instOp(divide)) == add);
+    CHECK(OP_B(build.function.instOp(divide)) == negate);
+    CHECK(build.function.instOp(store).cmd == IrCmd::STORE_VEC);
+    CHECK(OP_B(build.function.instOp(store)) == divide);
+    for (const IrInst& inst : build.function.instructions)
+    {
+        CHECK(inst.cmd != IrCmd::TAG_VECTOR);
+        CHECK(inst.cmd != IrCmd::TVALUE_TO_VEC);
+    }
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "ForgprepInvalidation")
@@ -5950,21 +6041,23 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "TagStoreUpdatesSetUpval")
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(0.5));
 
-    build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), build.vmReg(0), build.undef());
+    // Wide layouts require the actual tag independently of the payload.  Load
+    // it after the stores so this tests tag-fact propagation in either layout.
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(0));
+    IrOp payload = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
+    IrOp store = build.inst(IrCmd::SET_UPVALUE, build.vmUpvalue(0), payload, tag);
 
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(0));
 
     updateUseCounts(build.function);
     constPropInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
-bb_0:
-   STORE_TAG R0, tnumber
-   STORE_DOUBLE R0, 0.5
-   SET_UPVALUE U0, R0, tnumber
-   RETURN R0, 0i
-
-)");
+    CHECK(build.function.instOp(store).cmd == IrCmd::SET_UPVALUE);
+    CHECK(OP_C(build.function.instOp(store)) == build.constTag(tnumber));
+    CHECK(OP_B(build.function.instOp(store)) == payload);
+    CHECK(build.function.instOp(payload).cmd == IrCmd::LOAD_TVALUE);
+    CHECK(OP_A(build.function.instOp(payload)) == build.vmReg(0));
+    CHECK(OP_C(build.function.instOp(payload)) == build.constTag(tnumber));
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "TagSelfEqualityCheckRemoval")
@@ -6053,6 +6146,8 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "IndirectFloatLoadExtractionMustRespectVersion")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
@@ -6064,15 +6159,13 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "IndirectFloatLoadExtractionMustRespectVersi
     IrOp x2 = build.inst(IrCmd::FLOAT_TO_NUM, build.inst(IrCmd::LOAD_FLOAT, build.vmReg(5), build.constInt(0)));
 
     IrOp xMin = build.inst(IrCmd::NUM_TO_FLOAT, build.inst(IrCmd::MIN_NUM, x1, x2));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(7), xMin, build.constDouble(0.0), build.constDouble(0.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(7), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(7), xMin, build.constDouble(0.0), build.constDouble(0.0));
 
     IrOp xMinVec = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(7), build.constInt(0), build.constTag(tvector));
     build.inst(IrCmd::STORE_TVALUE, build.vmReg(6), xMinVec);
 
     IrOp xMax = build.inst(IrCmd::NUM_TO_FLOAT, build.inst(IrCmd::MAX_NUM, x1, x2));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(7), xMax, build.constDouble(0.0), build.constDouble(0.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(7), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(7), xMax, build.constDouble(0.0), build.constDouble(0.0));
 
     IrOp xMaxVec = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(7), build.constInt(0), build.constTag(tvector));
     build.inst(IrCmd::STORE_TVALUE, build.vmReg(5), xMaxVec);
@@ -6088,7 +6181,8 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "IndirectFloatLoadExtractionMustRespectVersi
     computeCfgInfo(build.function);
     constPropInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
 ; in regs: R4, R5
    %0 = LOAD_TAG R4
@@ -6101,23 +6195,22 @@ bb_0:
    %7 = FLOAT_TO_NUM %6
    %8 = MIN_NUM %5, %7
    %9 = NUM_TO_FLOAT %8
-   STORE_VECTOR R7, %9, 0, 0
-   STORE_TAG R7, tvector
-   %12 = LOAD_TVALUE R7, 0i, tvector
-   STORE_TVALUE R6, %12
+   %10 = BUILD_VEC %9, 0, 0
+   STORE_VEC R7, %10
+   STORE_VEC R6, %10
    %14 = MAX_NUM %5, %7
    %15 = NUM_TO_FLOAT %14
-   STORE_VECTOR R7, %15, 0, 0
-   %18 = LOAD_TVALUE R7, 0i, tvector
-   STORE_TVALUE R5, %18
-   STORE_TVALUE R4, %12
-   %21 = EXTRACT_VEC %12, 0i
-   %22 = FLOAT_TO_NUM %21
+   %16 = BUILD_VEC %15, 0, 0
+   STORE_VEC R7, %16
+   STORE_VEC R5, %16
+   STORE_VEC R4, %10
+   %22 = FLOAT_TO_NUM %9
    STORE_DOUBLE R0, %22
    STORE_TAG R0, tnumber
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VersionLimitChecks")
@@ -7145,48 +7238,58 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverNumber")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
     updateUseCounts(build.function);
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
-   STORE_VECTOR R0, 1, 2, 4, tvector
+   %2 = BUILD_VEC 1, 2, 4
+   STORE_VEC R0, %2
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverVector")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp firstW = kVectorSize4 ? build.constDouble(8.0) : IrOp{};
+    IrOp lastW = kVectorSize4 ? build.constDouble(16.0) : IrOp{};
 
     build.beginBlock(entry);
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(4.0), build.constDouble(2.0), build.constDouble(1.0), firstW);
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0), lastW);
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
     updateUseCounts(build.function);
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK_EQ(
+        "\n" + toString(build.function, IncludeUseInfo::No),
+        R"T16(
 bb_0:
-   STORE_VECTOR R0, 1, 2, 4, tvector
+   %2 = BUILD_VEC 1, 2, 4
+   STORE_VEC R0, %2
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverVector")
@@ -7194,8 +7297,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverVector")
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
@@ -7236,24 +7338,28 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverNil")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnil));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
     updateUseCounts(build.function);
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
-   STORE_VECTOR R0, 1, 2, 4, tvector
+   %1 = BUILD_VEC 1, 2, 4
+   STORE_VEC R0, %1
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverCombinedVector")
@@ -7263,8 +7369,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "NumberOverCombinedVector")
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(3.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
@@ -7283,31 +7388,39 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedVector")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
+    IrOp firstW = kVectorSize4 ? build.constDouble(8.0) : IrOp{};
+    IrOp lastW = kVectorSize4 ? build.constDouble(64.0) : IrOp{};
 
     build.beginBlock(entry);
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(2.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(4.0), firstW);
+    storeVectorComponents(build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0), lastW);
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
     updateUseCounts(build.function);
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK_EQ(
+        "\n" + toString(build.function, IncludeUseInfo::No),
+        R"T16(
 bb_0:
-   STORE_VECTOR R0, 8, 16, 32, tvector
+   %4 = BUILD_VEC 8, 16, 32
+   STORE_VEC R0, %4
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedNumber")
 {
+    ensureVectorSize3();
+
     IrOp entry = build.block(IrBlockKind::Internal);
 
     build.beginBlock(entry);
@@ -7315,20 +7428,22 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "VectorOverCombinedNumber")
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), build.constDouble(4.0));
     build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tnumber));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(0), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(0), build.constDouble(8.0), build.constDouble(16.0), build.constDouble(32.0));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
     updateUseCounts(build.function);
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
-   STORE_VECTOR R0, 8, 16, 32, tvector
+   %4 = BUILD_VEC 8, 16, 32
+   STORE_VEC R0, %4
    RETURN R0, 1i
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "NilStoreImplicitValueClear1")
@@ -7664,6 +7779,8 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncStoreVector")
 {
+    ensureVectorSize3();
+
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -7672,8 +7789,7 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncStoreVector")
     IrOp y = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(0), build.constInt(4));
     IrOp z = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(0), build.constInt(8));
 
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(1), x, y, z);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(1), x, y, z);
     build.inst(IrCmd::CHECK_TAG, build.inst(IrCmd::LOAD_TAG, build.vmReg(2)), build.constTag(tnumber), build.vmExit(1));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7683,7 +7799,8 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncStoreVector")
     markDeadStoresInBlockChains(build);
 
     // TODO: by checking aliasing between instructions, we can sink loads into the exit
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
 ; in regs: R0, R2
    %0 = LOAD_FLOAT R0, 0i
@@ -7695,11 +7812,12 @@ bb_0:
    RETURN R0, 1i
 
 bb_exit_1:
-   STORE_TAG R1, tvector
-   STORE_VECTOR R1, %0, %1, %2
+   %8 = BUILD_VEC %0, %1, %2
+   STORE_VEC R1, %8
    JUMP exit(1)
 
-)");
+)T16"
+    );
 }
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncStoreTvalue")
@@ -7926,13 +8044,14 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncVectorFullStore")
 {
+    ensureVectorSize3();
+
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
-    build.inst(IrCmd::LEGACY_STORE_VECTOR, build.vmReg(1), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(3.0));
-    build.inst(IrCmd::STORE_TAG, build.vmReg(1), build.constTag(tvector));
+    storeVectorComponents(build.vmReg(1), build.constDouble(1.0), build.constDouble(2.0), build.constDouble(3.0));
     build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(20));
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
 
@@ -7940,18 +8059,22 @@ TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncVectorFullStore")
     computeCfgInfo(build.function);
     markDeadStoresInBlockChains(build);
 
-    CHECK("\n" + toString(build.function, IncludeUseInfo::No) == R"(
+    CHECK(
+        "\n" + toString(build.function, IncludeUseInfo::No) == R"T16(
 bb_0:
 ; in regs: R0
+   STORE_TAG R1, tvector
    CHECK_SAFE_ENV bb_exit_1
    ; exit sync: R1, {}
    RETURN R0, 1i
 
 bb_exit_1:
-   STORE_VECTOR R1, 1, 2, 3, tvector
+   %5 = BUILD_VEC 1, 2, 3
+   STORE_VEC R1, %5
    JUMP exit(20)
 
-)");
+)T16"
+    );
 }
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncMultiUseSink")
 {
@@ -8189,16 +8312,18 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "PackedBufferVectorLanes")
 {
+    ensureVectorSize3();
+
     ScopedFastFlag luauCodegenMultiLaneDot{FFlag::LuauCodegenMultiLaneDot, true};
 
     build.beginBlock(build.block(IrBlockKind::Internal));
 
     IrOp vector = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(0));
-    IrOp tagged = build.inst(IrCmd::LEGACY_TAG_VECTOR, vector);
-    IrOp untagged = build.inst(IrCmd::LEGACY_UNTAG_VECTOR, tagged);
-    IrOp duplicate = build.inst(IrCmd::LEGACY_UNTAG_VECTOR, untagged);
-    IrOp three = build.inst(IrCmd::LEGACY_DOT_VEC, tagged, duplicate, build.constInt(3));
-    IrOp four = build.inst(IrCmd::LEGACY_DOT_VEC, tagged, duplicate, build.constInt(4));
+    IrOp tagged = build.inst(IrCmd::TAG_VECTOR, vector);
+    IrOp untagged = build.inst(IrCmd::UNTAG_VECTOR, tagged);
+    IrOp duplicate = build.inst(IrCmd::UNTAG_VECTOR, untagged);
+    IrOp three = build.inst(IrCmd::DOT_VEC, tagged, duplicate, build.constInt(3));
+    IrOp four = build.inst(IrCmd::DOT_VEC, tagged, duplicate, build.constInt(4));
 
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(1), build.inst(IrCmd::FLOAT_TO_NUM, three));
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(2), build.inst(IrCmd::FLOAT_TO_NUM, four));
