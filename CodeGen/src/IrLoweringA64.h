@@ -55,7 +55,8 @@ struct IrLoweringA64
     RegisterA64 tempInt(IrOp op);
     RegisterA64 tempInt64(IrOp op);
     RegisterA64 tempUint(IrOp op);
-    AddressA64 tempAddr(IrOp op, int offset, RegisterA64 tempStorage = noreg); // Existing temporary register can be provided
+    // Defaults to the conservative 4-byte encoding window; SIMD payload accesses pass 16.
+    AddressA64 tempAddr(IrOp op, int offset, RegisterA64 tempStorage = noreg, unsigned accessSize = 4);
     AddressA64 tempAddrBuffer(IrOp bufferOp, IrOp indexOp, uint8_t tag);
 
     // May emit restore instructions
