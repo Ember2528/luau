@@ -2760,6 +2760,21 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::CHECK_HASH_SINGLETON:
     {
+#if defined(LUAU_T24_NATIVE_MISS_SELECT_RESEARCH)
+        if (HAS_OP_C(inst) && intOp(OP_C(inst)) != 0)
+        {
+            RegisterA64 shape = regs.allocTemp(KindA64::x);
+            RegisterA64 metatable = regs.allocTemp(KindA64::x);
+            build.ldrb(castReg(KindA64::w, shape), mem(regOp(OP_A(inst)), offsetof(LuaTable, lsizenode)));
+            build.ldr(metatable, mem(regOp(OP_A(inst)), offsetof(LuaTable, metatable)));
+            build.orr(shape, shape, metatable);
+            Label fresh;
+            Label& target = getTargetLabel(OP_B(inst), index, fresh);
+            build.cbnz(shape, target);
+            finalizeTargetLabel(OP_B(inst), index, fresh);
+            break;
+        }
+#endif
         Label fresh;
         RegisterA64 temp = regs.allocTemp(KindA64::w);
         build.ldrb(temp, mem(regOp(OP_A(inst)), offsetof(LuaTable, lsizenode)));

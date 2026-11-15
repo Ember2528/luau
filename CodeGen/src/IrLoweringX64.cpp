@@ -170,7 +170,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // the original bytecode hint and their existing fallback policy.
         unsigned opcode = function.proto && uintOp(OP_B(inst)) < unsigned(function.proto->sizecode)
             ? LUAU_INSN_OP(function.proto->code[uintOp(OP_B(inst))]) : ~0u;
-        if (opcode == LOP_GETTABLEKS || opcode == LOP_GETUDATAKS)
+        if ((opcode == LOP_GETTABLEKS || opcode == LOP_GETUDATAKS) &&
+            (!HAS_OP_D(inst) || intOp(OP_D(inst)) == 0))
         {
             // Check the full hint's range without reserving CL.  A hint
             // outside the current hash size falls back to the bytecode slot.
@@ -2547,6 +2548,18 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_B(inst), index, next);
         break;
     case IrCmd::CHECK_HASH_SINGLETON:
+#if defined(LUAU_T24_NATIVE_MISS_SELECT_RESEARCH)
+        if (HAS_OP_C(inst) && intOp(OP_C(inst)) != 0)
+        {
+            // Both shape fields must be zero. Combine their failure edge,
+            // retaining the authoritative metatable check for nil misses.
+            ScopedRegX64 shape{regs, SizeX64::qword};
+            build.movzx(dwordReg(shape.reg), byte[regOp(OP_A(inst)) + offsetof(LuaTable, lsizenode)]);
+            build.or_(shape.reg, qword[regOp(OP_A(inst)) + offsetof(LuaTable, metatable)]);
+            jumpOrAbortOnUndef(ConditionX64::NotZero, OP_B(inst), index, next);
+            break;
+        }
+#endif
         build.cmp(byte[regOp(OP_A(inst)) + offsetof(LuaTable, lsizenode)], 0);
         jumpOrAbortOnUndef(ConditionX64::NotEqual, OP_B(inst), index, next);
         break;

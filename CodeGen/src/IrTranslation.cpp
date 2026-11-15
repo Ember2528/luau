@@ -2197,18 +2197,37 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
 
     IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
 
+    // Try the bytecode's ordinary slot first. Full-width hint work belongs
+    // on its mismatch edge, so small positive reads keep their original path.
+#if defined(LUAU_T24_NATIVE_HINT_SELECT_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+    IrOp hintRetry = build.fallbackBlock(pcpos);
+    IrOp addrSlotEl = build.inst(IrCmd::GET_SLOT_NODE_ADDR, vb, build.constUint(pcpos), build.vmConst(aux), build.constInt(1));
+#else
     IrOp addrSlotEl = build.inst(IrCmd::GET_SLOT_NODE_ADDR, vb, build.constUint(pcpos), build.vmConst(aux));
+#endif
 
     IrOp cachedMiss = fallback;
 #if defined(LUAU_T24_BALANCED_NATIVE_MISS_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
     cachedMiss = build.fallbackBlock(pcpos);
 #endif
+#if defined(LUAU_T24_NATIVE_HINT_SELECT_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+    build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotEl, build.vmConst(aux), hintRetry);
+#else
     build.inst(IrCmd::CHECK_SLOT_MATCH, addrSlotEl, build.vmConst(aux), cachedMiss);
+#endif
 
     LoadedTValue tvn = loadTValueAndTag(build, addrSlotEl, build.constInt(offsetof(LuaNode, val)));
     storeTValueAndTag(build, build.vmReg(ra), tvn);
 
     IrOp next = build.blockAtInst(pcpos + 2);
+#if defined(LUAU_T24_NATIVE_HINT_SELECT_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && defined(LUAU_T24_STRING_CONSTANT_NATIVE_RESEARCH)
+    build.inst(IrCmd::JUMP, next);
+    build.beginBlock(hintRetry);
+    IrOp retryTable = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    IrOp fullSlot = build.inst(IrCmd::GET_SLOT_NODE_ADDR, retryTable, build.constUint(pcpos), build.vmConst(aux));
+    build.inst(IrCmd::CHECK_SLOT_MATCH, fullSlot, build.vmConst(aux), cachedMiss);
+    storeTValueAndTag(build, build.vmReg(ra), loadTValueAndTag(build, fullSlot, build.constInt(offsetof(LuaNode, val))));
+#endif
 #if defined(LUAU_T24_BALANCED_NATIVE_MISS_RESEARCH) && LUAU_T24_STRING_CONSTANT_SLOT && LUA_VECTOR_SIZE == 4 && LUA_VECTOR_DOUBLE == 0
     build.inst(IrCmd::JUMP, next);
     build.beginBlock(cachedMiss);
@@ -2218,8 +2237,12 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
     // so its failed live-string match proves the queried string is absent.
     // Larger arenas use the original helper without a hash-home probe.
     IrOp missTable = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+#if defined(LUAU_T24_NATIVE_MISS_SELECT_RESEARCH)
+    build.inst(IrCmd::CHECK_HASH_SINGLETON, missTable, fallback, build.constInt(1));
+#else
     build.inst(IrCmd::CHECK_HASH_SINGLETON, missTable, fallback);
     build.inst(IrCmd::CHECK_NO_METATABLE, missTable, fallback);
+#endif
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNIL));
 #endif
     FallbackStreamScope scope(build, fallback, next);

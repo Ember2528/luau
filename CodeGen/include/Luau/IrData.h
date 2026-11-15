@@ -96,6 +96,7 @@ enum class IrCmd : uint8_t
     // A: pointer (LuaTable)
     // B: unsigned int (pcpos)
     // C: Kn
+    // D: int/none (nonzero restricts selection to the bytecode slot)
     GET_SLOT_NODE_ADDR,
 
     // Get pointer (LuaNode) to table node element at the main position of the specified key hash
@@ -716,6 +717,7 @@ enum class IrCmd : uint8_t
     // This establishes absence only after its cached slot failed a live-key match.
     // A: pointer (LuaTable)
     // B: block/vmexit/undef
+    // C: int/none (nonzero also requires a null metatable)
     CHECK_HASH_SINGLETON,
 
     // Guard against executing in unsafe environment, exits to VM on check failure
