@@ -324,6 +324,8 @@ TEST_SUITE_BEGIN("IrLowering");
 
 using namespace Luau::CodeGen;
 
+
+
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReciprocal")
 {
     ensureVectorFloat();

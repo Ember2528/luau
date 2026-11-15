@@ -2074,6 +2074,31 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         CODEGEN_ASSERT(LUA_VECTOR_DOUBLE == 0);
         // Keep every scalar input intact, including repeated inputs and inputs restored below.
         inst.regX64 = regs.allocReg(SizeX64::xmmword, index);
+#if defined(LUAU_T24_VECTOR_PACK_RESEARCH) && LUA_VECTOR_SIZE == 4
+        // The low float lane already has the required rounded bit pattern.
+        // INSERTPS accepts it directly from an XMM register or a 32-bit
+        // constant, without the old XMM -> GPR -> XMM round trip. The first
+        // insert explicitly clears every other lane, so no bits from the
+        // freshly allocated destination can escape (including on restores).
+        build.vinsertps(inst.regX64, inst.regX64, memRegFloatOp(OP_A(inst)), 0x0e);
+        auto insertComponent = [&](IrOp op, uint8_t lane)
+        {
+            if (op.kind == IrOpKind::Constant)
+            {
+                float value = float(doubleOp(op));
+                uint32_t bits;
+                memcpy(&bits, &value, sizeof(bits));
+                // The first insert already wrote +0 to this lane. Test the
+                // actual float bits so that -0 and NaNs are still inserted.
+                if (bits == 0)
+                    return;
+            }
+            build.vinsertps(inst.regX64, inst.regX64, memRegFloatOp(op), uint8_t(lane << 4));
+        };
+        insertComponent(OP_B(inst), 1);
+        insertComponent(OP_C(inst), 2);
+        insertComponent(OP_D(inst), 3);
+#else
         build.vxorpd(inst.regX64, inst.regX64, inst.regX64);
 
         ScopedRegX64 bits{regs};
@@ -2099,6 +2124,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         insertComponent(OP_C(inst), 2);
 #if LUA_VECTOR_SIZE == 4
         insertComponent(OP_D(inst), 3);
+#endif
 #endif
         break;
     }
