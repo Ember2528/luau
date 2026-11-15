@@ -699,6 +699,20 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
     t->sizearray = size;
 }
 
+#if defined(LUAU_T24_COMPACT_INIT_RESEARCH)
+#if !defined(LUAU_T24_PACKED_NODE)
+#error "Compact initialization requires packed nodes"
+#endif
+static LUAU_FORCEINLINE void initializeEmptyCompactNode(LuaNode* node)
+{
+    // The value tag and the complete packed key tag/chain word are adjacent.
+    // Whole aggregate assignment avoids preserving fields that are all empty.
+    // Leave the value/key payloads untouched, as in ordinary node initialization.
+    node->val.tt = LUA_TNIL;
+    node->val.nodekey = {};
+}
+#endif
+
 static void setnodevector(lua_State* L, LuaTable* t, int size)
 {
     int lsize;
@@ -721,12 +735,16 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
         for (i = 0; i < size; i++)
         {
             LuaNode* n = gnode(t, i);
+#if defined(LUAU_T24_COMPACT_INIT_RESEARCH)
+            initializeEmptyCompactNode(n);
+#else
             gnext(n) = 0;
 #if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && !defined(LUAU_T24_PACKED_NODE)
             n->key.iterNext = 0;
 #endif
             setnilvalue(gkey(n));
             setnilvalue(gval(n));
+#endif
         }
     }
     t->lsizenode = cast_byte(lsize);
@@ -816,12 +834,16 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         for (int i = 0; i < nhsize; i++)
         {
             LuaNode* n = &newnode[i];
+#if defined(LUAU_T24_COMPACT_INIT_RESEARCH)
+            initializeEmptyCompactNode(n);
+#else
             gnext(n) = 0;
 #if LUAU_T24_FROZEN_HASH_SKIP_ACTIVE && !defined(LUAU_T24_PACKED_NODE)
             n->key.iterNext = 0;
 #endif
             setnilvalue(gkey(n));
             setnilvalue(gval(n));
+#endif
         }
     }
 
@@ -1692,9 +1714,13 @@ void luaH_clear(LuaTable* tt)
         for (int i = 0; i < size; ++i)
         {
             LuaNode* n = gnode(tt, i);
+#if defined(LUAU_T24_COMPACT_INIT_RESEARCH)
+            initializeEmptyCompactNode(n);
+#else
             setnilvalue(gkey(n));
             setnilvalue(gval(n));
             gnext(n) = 0;
+#endif
         }
     }
 
