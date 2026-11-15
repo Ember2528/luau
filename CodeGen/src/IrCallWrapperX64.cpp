@@ -118,6 +118,12 @@ void IrCallWrapperX64::call(const OperandX64& func)
 
                 if (arg.source.memSize == SizeX64::none)
                     build.lea(tmp.reg, arg.source);
+                else if (arg.targetSize == SizeX64::xmmword)
+                {
+                    OperandX64 source = arg.source;
+                    source.memSize = SizeX64::qword;
+                    build.mov(tmp.reg, source);
+                }
                 else
                     build.mov(tmp.reg, arg.source);
 
@@ -127,7 +133,10 @@ void IrCallWrapperX64::call(const OperandX64& func)
             {
                 freeSourceRegisters(arg);
 
-                build.mov(arg.target, arg.source);
+                if (arg.source.base.size == SizeX64::xmmword)
+                    build.vmovsd(arg.target, arg.source);
+                else
+                    build.mov(arg.target, arg.source);
             }
 
             arg.candidate = false;
@@ -272,6 +281,14 @@ OperandX64 IrCallWrapperX64::getNextArgumentTarget(SizeX64 size) const
 {
     if (size == SizeX64::xmmword)
     {
+        if (build.abi == ABIX64::Windows && size_t(xmmPos) >= kXmmOrder.size())
+        {
+            CODEGEN_ASSERT(size_t(xmmPos) < kWindowsGprOrder.size());
+            OperandX64 target = kWindowsGprOrder[xmmPos];
+            target.memSize = SizeX64::qword; // scalar doubles occupy one stack argument slot
+            return target;
+        }
+
         CODEGEN_ASSERT(size_t(xmmPos) < kXmmOrder.size());
         return kXmmOrder[xmmPos];
     }
