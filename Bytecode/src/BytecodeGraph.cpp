@@ -58,9 +58,11 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
         }
     }
 
-    // store pointer to bytecode
+    // Serialized instructions follow a variable-length header and may be unaligned.
     int32_t codesize = readVarInt(data, offset);
-    const Instruction* code = reinterpret_cast<const Instruction*>(data + offset);
+    std::vector<Instruction> code(codesize);
+    if (codesize > 0)
+        memcpy(code.data(), data + offset, codesize * sizeof(Instruction));
 
     offset += codesize * sizeof(Instruction);
 
@@ -290,7 +292,7 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
 
     std::vector<uint32_t> insnsPC;
     BytecodeGraphParser<BcVmConst> graphParser(fn);
-    if (!graphParser.rebuildGraph(code, codesize, lines, insnsPC))
+    if (!graphParser.rebuildGraph(code.data(), codesize, lines, insnsPC))
         return {};
 
     for (BcFeedbackSlot& slot : fn.feedbackSlots)
