@@ -83,7 +83,7 @@ void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.defRange(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
         break;
     case IrCmd::GET_UPVALUE:
-        break;
+    case IrCmd::GET_UPVALUE_ADDR:
     case IrCmd::SET_UPVALUE:
         break;
     case IrCmd::INTERRUPT:

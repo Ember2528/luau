@@ -230,6 +230,8 @@ const char* getCmdName(IrCmd cmd)
         return "SELECT_VEC";
     case IrCmd::SELECT_IF_TRUTHY:
         return "SELECT_IF_TRUTHY";
+    case IrCmd::SELECT_TAG_IF_TRUTHY:
+        return "SELECT_TAG_IF_TRUTHY";
     case IrCmd::ADD_VEC:
         return "ADD_VEC";
     case IrCmd::SUB_VEC:
@@ -330,6 +332,8 @@ const char* getCmdName(IrCmd cmd)
         return "NUM_TO_FLOAT";
     case IrCmd::FLOAT_TO_VEC:
         return "FLOAT_TO_VEC";
+    case IrCmd::BUILD_VEC:
+        return "BUILD_VEC";
     case IrCmd::TAG_VECTOR:
         return "TAG_VECTOR";
     case IrCmd::UNTAG_VECTOR:
@@ -366,6 +370,8 @@ const char* getCmdName(IrCmd cmd)
         return "CONCAT";
     case IrCmd::GET_UPVALUE:
         return "GET_UPVALUE";
+    case IrCmd::GET_UPVALUE_ADDR:
+        return "GET_UPVALUE_ADDR";
     case IrCmd::SET_UPVALUE:
         return "SET_UPVALUE";
     case IrCmd::CHECK_TAG:

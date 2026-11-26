@@ -157,6 +157,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::NOP:
         return IrValueKind::None;
     case IrCmd::LOAD_TAG:
+    case IrCmd::SELECT_TAG_IF_TRUTHY:
         return IrValueKind::Tag;
     case IrCmd::LOAD_POINTER:
         return IrValueKind::Pointer;
@@ -311,6 +312,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::NUM_TO_FLOAT:
         return IrValueKind::Float;
     case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::BUILD_VEC:
     case IrCmd::TAG_VECTOR:
     case IrCmd::UNTAG_VECTOR:
         return IrValueKind::Tvalue;
@@ -336,6 +338,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
         return IrValueKind::None;
     case IrCmd::GET_UPVALUE:
         return IrValueKind::Tvalue;
+    case IrCmd::GET_UPVALUE_ADDR:
+        return IrValueKind::Pointer;
     case IrCmd::SET_UPVALUE:
     case IrCmd::CHECK_TAG:
     case IrCmd::CHECK_TRUTHY:
@@ -1113,6 +1117,28 @@ void foldConstants(IrBuilder& build, IrFunction& function, IrBlock& block, uint3
         {
             // If the values are the same, no need to worry about the condition check
             substitute(function, inst, OP_B(inst));
+        }
+        else if (HAS_OP_D(inst) && OP_D(inst).kind == IrOpKind::Constant)
+        {
+            uint8_t tag = function.tagOp(OP_D(inst));
+            if (tag == LUA_TNIL)
+                substitute(function, inst, OP_C(inst));
+            else if (tag != LUA_TBOOLEAN)
+                substitute(function, inst, OP_B(inst));
+        }
+        break;
+    case IrCmd::SELECT_TAG_IF_TRUTHY:
+        if (OP_C(inst) == OP_D(inst))
+        {
+            substitute(function, inst, OP_C(inst));
+        }
+        else if (OP_A(inst).kind == IrOpKind::Constant)
+        {
+            uint8_t tag = function.tagOp(OP_A(inst));
+            if (tag == LUA_TNIL)
+                substitute(function, inst, OP_D(inst));
+            else if (tag != LUA_TBOOLEAN)
+                substitute(function, inst, OP_C(inst));
         }
         break;
     case IrCmd::NOT_ANY:
@@ -1950,7 +1976,7 @@ std::optional<uint8_t> tryGetOperandTag(IrFunction& function, IrOp op)
 {
     if (IrInst* arg = function.asInstOp(op))
     {
-        if (arg->cmd == IrCmd::TAG_VECTOR)
+        if (arg->cmd == IrCmd::TAG_VECTOR || arg->cmd == IrCmd::BUILD_VEC)
             return LUA_TVECTOR;
 
         if (arg->cmd == IrCmd::LOAD_TVALUE && HAS_OP_C(*arg))

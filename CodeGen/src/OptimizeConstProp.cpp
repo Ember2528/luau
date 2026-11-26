@@ -297,13 +297,17 @@ struct ConstPropState
     {
         valueMap.clear();
         upvalueMap.clear();
+        upvalueTagMap.clear();
+        upvalueAddrMap.clear();
 
         tryNumToIndexCache.clear();
 
         bufferLoadStoreInfo.clear();
 
         hashValueCache.clear();
+        hashTagCache.clear();
         arrayValueCache.clear();
+        arrayTagCache.clear();
 
         // While other map clears already prevent instValue keys from matching again, this saves memory and map size
         instValue.clear();
@@ -313,6 +317,27 @@ struct ConstPropState
 
     // If table memory has changed, we can't reuse previously computed and validated table slot lookups
     // Same goes for table array elements as well
+    void invalidateDynamicTableTagCaches()
+    {
+        // Barrier slow paths spill all live registers; avoid stretching dynamic LOAD_TAG
+        // live ranges across them when reloading a 4-byte tag from memory is cheaper and
+        // avoids exhausting spill slots. Constant tags remain available via table value
+        // caches and constant upvalueTagMap entries.
+        hashTagCache.clear();
+        arrayTagCache.clear();
+
+        for (auto& [upval, tag] : upvalueTagMap)
+        {
+            if (tag.kind == IrOpKind::Inst)
+            {
+                if (uint8_t known = tryGetTag(tag); known != 0xff)
+                    tag = build.constTag(known);
+                else
+                    tag = {};
+            }
+        }
+    }
+
     void invalidateHeapTableData()
     {
         getSlotNodeCache.clear();
@@ -323,7 +348,9 @@ struct ConstPropState
         checkArraySizeCache.clear();
 
         hashValueCache.clear();
+        hashTagCache.clear();
         arrayValueCache.clear();
+        arrayTagCache.clear();
     }
 
     void invalidateHeapBufferData()
@@ -362,6 +389,8 @@ struct ConstPropState
         invalidateValuePropagation();
 
         upvalueMap.clear();
+        upvalueTagMap.clear();
+        upvalueAddrMap.clear();
 
         inSafeEnv = false;
     }
@@ -676,13 +705,13 @@ struct ConstPropState
         return IrInst{loadInst.cmd, {op}};
     }
 
-    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst)
+    bool substituteOrRecordVmUpvalueLoad(IrInst& loadInst, IrOp upvalue)
     {
-        CODEGEN_ASSERT(OP_A(loadInst).kind == IrOpKind::VmUpvalue);
+        CODEGEN_ASSERT(upvalue.kind == IrOpKind::VmUpvalue);
 
-        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(OP_A(loadInst))))
+        if (uint32_t* prevIdx = upvalueMap.find(vmUpvalueOp(upvalue)))
         {
-            if (*prevIdx != kInvalidInstIdx)
+            if (*prevIdx != kInvalidInstIdx && function.instructions[*prevIdx].useCount != 0)
             {
                 // Substitute load instruction with the previous value
                 substitute(function, loadInst, IrOp{IrOpKind::Inst, *prevIdx});
@@ -693,7 +722,101 @@ struct ConstPropState
         uint32_t instIdx = function.getInstIndex(loadInst);
 
         // Record load of this upvalue for future substitution
-        upvalueMap[vmUpvalueOp(OP_A(loadInst))] = instIdx;
+        upvalueMap[vmUpvalueOp(upvalue)] = instIdx;
+        return false;
+    }
+
+    bool substituteOrRecordVmUpvalueTagLoad(IrInst& loadInst, IrOp upvalue)
+    {
+        CODEGEN_ASSERT(upvalue.kind == IrOpKind::VmUpvalue);
+
+        if (IrOp* prevTag = upvalueTagMap.find(vmUpvalueOp(upvalue)))
+        {
+            if (prevTag->kind == IrOpKind::Constant)
+            {
+                substitute(function, loadInst, *prevTag);
+                return true;
+            }
+            if (prevTag->kind == IrOpKind::Inst)
+            {
+                if (uint8_t known = tryGetTag(*prevTag); known != 0xff)
+                {
+                    substitute(function, loadInst, build.constTag(known));
+                    return true;
+                }
+                if (function.instructions[prevTag->index].useCount != 0)
+                {
+                    substitute(function, loadInst, *prevTag);
+                    return true;
+                }
+            }
+        }
+
+        upvalueTagMap[vmUpvalueOp(upvalue)] = IrOp{IrOpKind::Inst, function.getInstIndex(loadInst)};
+        return false;
+    }
+
+    bool trySubstituteTagFromTableValue(IrInst& loadInst, uint32_t prevIdx)
+    {
+        IrInst& prev = function.instructions[prevIdx];
+
+        if (prev.cmd == IrCmd::STORE_SPLIT_TVALUE)
+        {
+            substitute(function, loadInst, OP_B(prev));
+            return true;
+        }
+
+        if (prev.cmd == IrCmd::STORE_TVALUE && HAS_OP_D(prev))
+        {
+            if (OP_D(prev).kind == IrOpKind::Constant)
+            {
+                substitute(function, loadInst, OP_D(prev));
+                return true;
+            }
+            if (uint8_t known = tryGetTag(OP_D(prev)); known != 0xff)
+            {
+                substitute(function, loadInst, build.constTag(known));
+                return true;
+            }
+        }
+
+        if (prev.cmd == IrCmd::LOAD_TVALUE)
+        {
+            if (uint8_t* known = instTag.find(prevIdx); known && *known != 0xff)
+            {
+                substitute(function, loadInst, build.constTag(*known));
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    ArrayValueEntry* findArrayCacheEntry(std::vector<ArrayValueEntry>& cache, uint32_t pointer, IrOp offsetOp)
+    {
+        for (ArrayValueEntry& el : cache)
+        {
+            if (el.pointer == pointer && el.offset == offsetOp)
+                return &el;
+        }
+        return nullptr;
+    }
+
+    bool trySubstituteCachedTag(IrInst& loadInst, uint32_t prevTagIdx)
+    {
+        if (prevTagIdx == kInvalidInstIdx)
+            return false;
+
+        if (uint8_t* known = instTag.find(prevTagIdx); known && *known != 0xff)
+        {
+            substitute(function, loadInst, build.constTag(*known));
+            return true;
+        }
+        if (function.instructions[prevTagIdx].useCount != 0)
+        {
+            substitute(function, loadInst, IrOp{IrOpKind::Inst, prevTagIdx});
+            return true;
+        }
         return false;
     }
 
@@ -722,6 +845,8 @@ struct ConstPropState
                 argOp = OP_C(store);
             else if (offset == 8)
                 argOp = OP_D(store);
+            else if (offset == 12 && LUA_VECTOR_SIZE == 4)
+                argOp = HAS_OP_F(store) ? OP_F(store) : build.constDouble(0.0);
 
             if (IrInst* arg = function.asInstOp(argOp))
             {
@@ -953,6 +1078,8 @@ struct ConstPropState
                     component = OP_B(addrInst);
                 else if (offset == 16)
                     component = OP_C(addrInst);
+                else if (offset == 24 && HAS_OP_D(addrInst))
+                    component = OP_D(addrInst);
 
                 if (component.kind != IrOpKind::None)
                 {
@@ -1267,6 +1394,14 @@ struct ConstPropState
                     loadedValueIdx = kInvalidInstIdx;
             }
 
+            for (auto& [pointerIdx, loadedTagIdx] : hashTagCache)
+            {
+                IrInst& address = function.instructions[pointerIdx];
+
+                if (OP_C(address) == OP_C(targetAddr))
+                    loadedTagIdx = kInvalidInstIdx;
+            }
+
             // If we don't know what tag was written or it is nil, on the next access we will need to recheck that it's not nil
             if (tag == kUnknownTag || tag == LUA_TNIL)
             {
@@ -1290,24 +1425,30 @@ struct ConstPropState
             {
                 // This store is at unknown position, clear all data
                 arrayValueCache.clear();
+                arrayTagCache.clear();
             }
             else
             {
-                for (size_t i = 0; i < arrayValueCache.size();)
+                auto invalidateMatching = [&](std::vector<ArrayValueEntry>& cache)
                 {
-                    auto& entry = arrayValueCache[i];
+                    for (size_t i = 0; i < cache.size();)
+                    {
+                        auto& entry = cache[i];
 
-                    // Clear cached results at unknown positions and matching known position
-                    if (entry.offset.kind != IrOpKind::Constant || function.intOp(entry.offset) == *optOffset)
-                    {
-                        entry = arrayValueCache.back();
-                        arrayValueCache.pop_back();
+                        // Clear cached results at unknown positions and matching known position
+                        if (entry.offset.kind != IrOpKind::Constant || function.intOp(entry.offset) == *optOffset)
+                        {
+                            entry = cache.back();
+                            cache.pop_back();
+                        }
+                        else
+                        {
+                            i++;
+                        }
                     }
-                    else
-                    {
-                        i++;
-                    }
-                }
+                };
+                invalidateMatching(arrayValueCache);
+                invalidateMatching(arrayTagCache);
             }
         }
         else if (targetAddr.cmd == IrCmd::TABLE_SETNUM)
@@ -1455,10 +1596,14 @@ struct ConstPropState
 
     // For upvalue load-store optimizations, we just keep track of the last known value of the upvalue
     DenseHashMap<uint8_t, uint32_t> upvalueMap;
+    DenseHashMap<uint8_t, IrOp> upvalueTagMap;
+    DenseHashMap<uint8_t, uint32_t> upvalueAddrMap;
 
     // For load-store optimizations of table elements, separate maps for hash and array parts as writes to one do not affect the other
     DenseHashMap<uint32_t, uint32_t> hashValueCache;
+    DenseHashMap<uint32_t, uint32_t> hashTagCache;
     std::vector<ArrayValueEntry> arrayValueCache;
+    std::vector<ArrayValueEntry> arrayTagCache;
 
     // Some instruction re-uses can't be stored in valueMap because of extra requirements
     std::vector<uint32_t> tryNumToIndexCache; // Fallback block argument might be different
@@ -1635,6 +1780,48 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
             state.substituteOrRecordVmRegLoad(inst);
         }
+        else if (IrInst* source = function.asInstOp(OP_A(inst)))
+        {
+            if (source->cmd == IrCmd::GET_UPVALUE_ADDR && (!HAS_OP_B(inst) || function.intOp(OP_B(inst)) == 0))
+            {
+                state.substituteOrRecordVmUpvalueTagLoad(inst, OP_A(*source));
+            }
+            else if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR && (!HAS_OP_B(inst) || function.intOp(OP_B(inst)) == offsetof(LuaNode, val)))
+            {
+                if (uint32_t* prevIdx = state.hashValueCache.find(OP_A(inst).index); prevIdx && *prevIdx != kInvalidInstIdx)
+                {
+                    if (state.trySubstituteTagFromTableValue(inst, *prevIdx))
+                        break;
+                }
+
+                if (uint32_t* prevTagIdx = state.hashTagCache.find(OP_A(inst).index); prevTagIdx && state.trySubstituteCachedTag(inst, *prevTagIdx))
+                    break;
+
+                state.hashTagCache[OP_A(inst).index] = index;
+            }
+            else if (source->cmd == IrCmd::GET_ARR_ADDR)
+            {
+                IrOp offsetOp = state.getCombinedArrayLoadOffsetOp(*source, OPT_OP_B(inst));
+
+                if (ArrayValueEntry* valEntry = state.findArrayCacheEntry(state.arrayValueCache, OP_A(inst).index, offsetOp);
+                    valEntry && valEntry->value != kInvalidInstIdx)
+                {
+                    if (state.trySubstituteTagFromTableValue(inst, valEntry->value))
+                        break;
+                }
+
+                if (ArrayValueEntry* tagEntry = state.findArrayCacheEntry(state.arrayTagCache, OP_A(inst).index, offsetOp))
+                {
+                    if (state.trySubstituteCachedTag(inst, tagEntry->value))
+                        break;
+
+                    tagEntry->value = index;
+                    break;
+                }
+
+                state.arrayTagCache.push_back({OP_A(inst).index, offsetOp, index});
+            }
+        }
         break;
     case IrCmd::LOAD_POINTER:
         if (OP_A(inst).kind == IrOpKind::VmReg)
@@ -1742,6 +1929,13 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                     }
                 }
 
+                if (value.cmd == IrCmd::BUILD_VEC)
+                {
+                    CODEGEN_ASSERT(component < value.ops.size());
+                    substitute(function, inst, value.ops[component]);
+                    break;
+                }
+
                 replace(function, block, index, IrInst{IrCmd::EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
 
                 state.substituteOrRecord(inst, index);
@@ -1763,7 +1957,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         else if (IrInst* source = function.asInstOp(OP_A(inst)))
         {
-            if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
+            if (source->cmd == IrCmd::GET_UPVALUE_ADDR && (!HAS_OP_B(inst) || function.intOp(OP_B(inst)) == 0))
+            {
+                state.substituteOrRecordVmUpvalueLoad(inst, OP_A(*source));
+            }
+            else if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR)
             {
                 uint32_t* prevIdx = state.hashValueCache.find(OP_A(inst).index);
 
@@ -2006,7 +2204,19 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 {
                     if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(inst)))
                     {
-                        if (*prevIdx == OP_B(inst).index)
+                        bool tagMatches = !HAS_OP_D(inst);
+                        if (!tagMatches)
+                        {
+                            if (OP_D(inst).kind == IrOpKind::Constant)
+                                tagMatches = state.tryGetTag(OP_A(inst)) == function.tagOp(OP_D(inst));
+                            else if (OP_D(inst).kind == IrOpKind::Inst)
+                            {
+                                uint32_t* prevTagIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TAG, OP_A(inst));
+                                tagMatches = prevTagIdx && *prevTagIdx == OP_D(inst).index;
+                            }
+                        }
+
+                        if (*prevIdx == OP_B(inst).index && tagMatches)
                         {
                             if (FFlag::LuauCodegenMarkUsed)
                                 state.killStore(block, inst);
@@ -2021,6 +2231,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             }
 
             uint8_t tag = state.tryGetTag(OP_B(inst));
+
+            if (tag == 0xff && HAS_OP_D(inst))
+                tag = OP_D(inst).kind == IrOpKind::Constant ? function.tagOp(OP_D(inst)) : state.tryGetTag(OP_D(inst));
 
             // We know the tag of some instructions that result in TValue
             if (tag == 0xff)
@@ -2062,15 +2275,17 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (tag == LUA_TBOOLEAN &&
                 (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TNUMBER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
+            else if (
+                tag == LUA_TNUMBER &&
+                (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double))
+            )
                 canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
 
             if (canSplitTvalueStore)
             {
-                if (HAS_OP_C(inst))
+                if (HAS_OP_C(inst) && OP_A(inst).kind != IrOpKind::VmReg)
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value, OP_C(inst)}});
                 else
                     replace(function, block, index, {IrCmd::STORE_SPLIT_TVALUE, {OP_A(inst), build.constTag(tag), value}});
@@ -2082,13 +2297,22 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 if (IrInst* target = function.asInstOp(OP_A(inst)))
                     state.forwardTableStoreToLoad(*target, OPT_OP_D(inst), index);
             }
-            else if (OP_A(inst).kind == IrOpKind::VmReg)
+            else
             {
-                state.forwardVmRegStoreToLoad(inst, IrCmd::LOAD_TVALUE);
-            }
-            else if (IrInst* target = function.asInstOp(OP_A(inst)))
-            {
-                state.forwardTableStoreToLoad(*target, OPT_OP_C(inst), index);
+                if (tag != 0xff && HAS_OP_D(inst) && OP_D(inst).kind != IrOpKind::Constant)
+                    replace(function, OP_D(inst), build.constTag(tag));
+
+                if (OP_A(inst).kind == IrOpKind::VmReg)
+                {
+                    state.forwardVmRegStoreToLoad(inst, IrCmd::LOAD_TVALUE);
+
+                    if (HAS_OP_D(inst) && OP_D(inst).kind == IrOpKind::Inst && !function.cfg.captured.regs.test(vmRegOp(OP_A(inst))))
+                        state.valueMap[state.versionedVmRegLoad(IrCmd::LOAD_TAG, OP_A(inst))] = OP_D(inst).index;
+                }
+                else if (IrInst* target = function.asInstOp(OP_A(inst)))
+                {
+                    state.forwardTableStoreToLoad(*target, OPT_OP_C(inst), index);
+                }
             }
         }
         break;
@@ -2258,16 +2482,44 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     }
     case IrCmd::GET_UPVALUE:
-        state.substituteOrRecordVmUpvalueLoad(inst);
+        state.substituteOrRecordVmUpvalueLoad(inst, OP_A(inst));
+        break;
+    case IrCmd::GET_UPVALUE_ADDR:
+        if (uint32_t* prevIdx = state.upvalueAddrMap.find(vmUpvalueOp(OP_A(inst))))
+        {
+            if (*prevIdx != kInvalidInstIdx && function.instructions[*prevIdx].useCount != 0)
+            {
+                substitute(function, inst, IrOp{IrOpKind::Inst, *prevIdx});
+                break;
+            }
+        }
+        state.upvalueAddrMap[vmUpvalueOp(OP_A(inst))] = index;
         break;
     case IrCmd::SET_UPVALUE:
+    {
         state.forwardVmUpvalueStoreToLoad(inst);
 
-        if (uint8_t tag = state.tryGetTag(OP_B(inst)); tag != 0xff)
+        uint8_t tag = state.tryGetTag(OP_B(inst));
+        if (tag == 0xff && OP_C(inst).kind == IrOpKind::Inst)
+            tag = state.tryGetTag(OP_C(inst));
+        if (tag == 0xff)
+            tag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
+
+        if (tag != 0xff)
         {
             replace(function, OP_C(inst), build.constTag(tag));
+            state.upvalueTagMap[vmUpvalueOp(OP_A(inst))] = build.constTag(tag);
+        }
+        else if (OP_C(inst).kind == IrOpKind::Constant || OP_C(inst).kind == IrOpKind::Inst)
+        {
+            state.upvalueTagMap[vmUpvalueOp(OP_A(inst))] = OP_C(inst);
+        }
+        else
+        {
+            state.upvalueTagMap[vmUpvalueOp(OP_A(inst))] = IrOp{};
         }
         break;
+    }
     case IrCmd::CHECK_TAG:
     {
         uint8_t b = function.tagOp(OP_B(inst));
@@ -2302,10 +2554,35 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
             // If we are loading a tag from a register which has previously been loaded as a full TValue
             // We can associate a known tag with that instruction going forward
-            if (lhs.cmd == IrCmd::LOAD_TAG && OP_A(lhs).kind == IrOpKind::VmReg)
+            if (lhs.cmd == IrCmd::LOAD_TAG)
             {
-                if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(lhs)))
-                    state.instTag[*prevIdx] = b;
+                state.instTag[OP_A(inst).index] = b;
+
+                if (OP_A(lhs).kind == IrOpKind::VmReg)
+                {
+                    if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(lhs)))
+                        state.instTag[*prevIdx] = b;
+                }
+                else if (IrInst* source = function.asInstOp(OP_A(lhs)))
+                {
+                    if (source->cmd == IrCmd::GET_UPVALUE_ADDR && (!HAS_OP_B(lhs) || function.intOp(OP_B(lhs)) == 0))
+                    {
+                        if (uint32_t* prevIdx = state.upvalueMap.find(vmUpvalueOp(OP_A(*source))); prevIdx && *prevIdx != kInvalidInstIdx)
+                            state.instTag[*prevIdx] = b;
+                    }
+                    else if (source->cmd == IrCmd::GET_SLOT_NODE_ADDR && (!HAS_OP_B(lhs) || function.intOp(OP_B(lhs)) == offsetof(LuaNode, val)))
+                    {
+                        if (uint32_t* prevIdx = state.hashValueCache.find(OP_A(lhs).index); prevIdx && *prevIdx != kInvalidInstIdx)
+                            state.instTag[*prevIdx] = b;
+                    }
+                    else if (source->cmd == IrCmd::GET_ARR_ADDR)
+                    {
+                        IrOp offsetOp = state.getCombinedArrayLoadOffsetOp(*source, OPT_OP_B(lhs));
+                        if (ArrayValueEntry* valEntry = state.findArrayCacheEntry(state.arrayValueCache, OP_A(lhs).index, offsetOp);
+                            valEntry && valEntry->value != kInvalidInstIdx)
+                            state.instTag[valEntry->value] = b;
+                    }
+                }
             }
 
             state.updateTag(OP_A(inst), b); // We can assume the tag value going forward
@@ -2548,23 +2825,37 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             state.checkedGc = true;
 
-            // GC assist might modify table data (hash part)
+            // GC assist might modify table data (hash part) or shrink stack (moving open upvalue pointers)
             state.invalidateHeapTableData();
+            state.upvalueAddrMap.clear();
         }
         break;
     case IrCmd::BARRIER_OBJ:
     case IrCmd::BARRIER_TABLE_FORWARD:
+    {
+        bool killed = false;
         if (OP_B(inst).kind == IrOpKind::VmReg)
         {
             if (uint8_t tag = state.tryGetTag(OP_B(inst)); tag != 0xff)
             {
                 // If the written object is not collectable, barrier is not required
                 if (!isGCO(tag))
+                {
                     kill(function, inst);
+                    killed = true;
+                }
                 else
+                {
                     replace(function, OP_C(inst), build.constTag(tag));
+                }
             }
         }
+        if (!killed)
+            state.invalidateDynamicTableTagCaches();
+        break;
+    }
+    case IrCmd::BARRIER_TABLE_BACK:
+        state.invalidateDynamicTableTagCaches();
         break;
 
     case IrCmd::FASTCALL:
@@ -2592,6 +2883,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     }
     case IrCmd::INVOKE_FASTCALL:
         handleBuiltinEffects(state, LuauBuiltinFunction(function.uintOp(OP_A(inst))), vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
+        state.upvalueAddrMap.clear();
         break;
 
     case IrCmd::INVOKE_FASTPCALL:
@@ -2736,9 +3028,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SELECT_INT64:
     case IrCmd::SELECT_VEC:
     case IrCmd::MULADD_VEC:
-    case IrCmd::EXTRACT_VEC:
     case IrCmd::NOT_ANY:
         state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::EXTRACT_VEC:
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::BUILD_VEC)
+        {
+            unsigned component = unsigned(function.intOp(OP_B(inst)));
+            CODEGEN_ASSERT(component < source->ops.size());
+            substitute(function, inst, source->ops[component]);
+        }
+        else
+        {
+            state.substituteOrRecord(inst, index);
+        }
         break;
     case IrCmd::ADD_FLOAT:
     case IrCmd::SUB_FLOAT:
@@ -2799,14 +3102,45 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.substituteOrRecord(inst, index);
         break;
     case IrCmd::SELECT_IF_TRUTHY:
-        if (uint8_t tag = state.tryGetTag(OP_A(inst)); tag != 0xff)
+    {
+        uint8_t tag = HAS_OP_D(inst)
+                          ? (OP_D(inst).kind == IrOpKind::Constant ? function.tagOp(OP_D(inst)) : state.tryGetTag(OP_D(inst)))
+                          : state.tryGetTag(OP_A(inst));
+        if (tag == 0xff)
+            tag = state.tryGetTag(OP_A(inst));
+
+        if (tag != 0xff)
         {
             if (tag == LUA_TNIL)
                 substitute(function, inst, OP_C(inst));
             else if (tag != LUA_TBOOLEAN)
                 substitute(function, inst, OP_B(inst));
+            else if (std::optional<int> boolVal = function.asIntOp(state.tryGetValue(OP_A(inst))))
+                substitute(function, inst, *boolVal ? OP_B(inst) : OP_C(inst));
+            else if (HAS_OP_D(inst) && OP_D(inst).kind != IrOpKind::Constant)
+                replace(function, OP_D(inst), build.constTag(LUA_TBOOLEAN));
         }
         break;
+    }
+    case IrCmd::SELECT_TAG_IF_TRUTHY:
+    {
+        uint8_t tag = OP_A(inst).kind == IrOpKind::Constant ? function.tagOp(OP_A(inst)) : state.tryGetTag(OP_A(inst));
+        if (tag == 0xff)
+            tag = state.tryGetTag(OP_B(inst));
+
+        if (tag != 0xff)
+        {
+            if (tag == LUA_TNIL)
+                substitute(function, inst, OP_D(inst));
+            else if (tag != LUA_TBOOLEAN)
+                substitute(function, inst, OP_C(inst));
+            else if (std::optional<int> boolVal = function.asIntOp(state.tryGetValue(OP_B(inst))))
+                substitute(function, inst, *boolVal ? OP_C(inst) : OP_D(inst));
+            else if (OP_A(inst).kind != IrOpKind::Constant)
+                replace(function, OP_A(inst), build.constTag(LUA_TBOOLEAN));
+        }
+        break;
+    }
     case IrCmd::CMP_INT:
     case IrCmd::CMP_INT64:
         break;
@@ -3212,7 +3546,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
 
     case IrCmd::DOT_VEC:
-        if (!FFlag::LuauCodegenMultiLaneDot || function.intOp(OP_C(inst)) == 3)
+        if (sizeof(TValue) > 16 || !FFlag::LuauCodegenMultiLaneDot || function.intOp(OP_C(inst)) == 3)
         {
             if (IrInst* a = function.asInstOp(OP_A(inst)); a && a->cmd == IrCmd::TAG_VECTOR)
                 replace(function, OP_A(inst), OP_A(a));
@@ -3236,6 +3570,15 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
     case IrCmd::FLOAT_TO_VEC:
     case IrCmd::TAG_VECTOR:
+        state.substituteOrRecord(inst, index);
+        break;
+
+    case IrCmd::BUILD_VEC:
+        for (IrOp& component : inst.ops)
+        {
+            if (std::optional<double> value = function.asDoubleOp(component))
+                replace(function, component, build.constDouble(float(*value)));
+        }
         state.substituteOrRecord(inst, index);
         break;
 
@@ -3281,11 +3624,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
-    case IrCmd::BARRIER_TABLE_BACK:
     case IrCmd::RETURN:
     case IrCmd::COVERAGE:
     case IrCmd::SET_SAVEDPC:  // TODO: we may be able to remove some updates to PC
-    case IrCmd::CLOSE_UPVALS: // Doesn't change memory that we track
     case IrCmd::CAPTURE:
     case IrCmd::SUBSTITUTE:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
@@ -3319,6 +3660,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_TYPEOF:
     case IrCmd::FINDUPVAL:
     case IrCmd::JUMP_CMP_PROTOID:
+        break;
+    case IrCmd::CLOSE_UPVALS:
+        // Closing upvalues moves open UpVal.v pointers from the stack into UpVal.u.value.
+        state.upvalueAddrMap.clear();
         break;
 
     case IrCmd::DO_ARITH:

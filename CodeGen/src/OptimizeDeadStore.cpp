@@ -51,6 +51,7 @@ static bool isUnsafeToSink(IrInst& inst)
 
     // Upvalue read: SET_UPVALUE to the same upvalue slot
     case IrCmd::GET_UPVALUE:
+    case IrCmd::GET_UPVALUE_ADDR:
 
     // Reads table array metadata: TABLE_SETNUM can grow the array and change the length
     case IrCmd::TABLE_LEN:
@@ -698,10 +699,10 @@ static bool tryReplaceTagWithFullStore(
             if (prevValueInst.cmd == IrCmd::STORE_VECTOR)
             {
                 CODEGEN_ASSERT(!HAS_OP_E(prevValueInst));
-                IrOp prevValueX = OP_B(prevValueInst);
-                IrOp prevValueY = OP_C(prevValueInst);
-                IrOp prevValueZ = OP_D(prevValueInst);
-                replace(function, block, instIndex, IrInst{IrCmd::STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
+                IrInst store{IrCmd::STORE_VECTOR, prevValueInst.ops};
+                OP_A(store) = targetOp;
+                OP_E(store) = tagOp;
+                replace(function, block, instIndex, store);
             }
             else
             {
@@ -751,10 +752,10 @@ static bool tryReplaceTagWithFullStore(
             // If the 'nil' is stored, we keep 'STORE_TAG Rn, tnil' as it writes the 'full' TValue
             if (tag != LUA_TNIL)
             {
-                IrOp prevValueX = OP_B(prev);
-                IrOp prevValueY = OP_C(prev);
-                IrOp prevValueZ = OP_D(prev);
-                replace(function, block, instIndex, IrInst{IrCmd::STORE_VECTOR, {targetOp, prevValueX, prevValueY, prevValueZ, tagOp}});
+                IrInst store{IrCmd::STORE_VECTOR, prev.ops};
+                OP_A(store) = targetOp;
+                OP_E(store) = tagOp;
+                replace(function, block, instIndex, store);
             }
 
             CODEGEN_ASSERT(regInfo.tagInstIdx == kInvalidInstIdx && regInfo.valueInstIdx == kInvalidInstIdx);
@@ -869,8 +870,8 @@ static bool tryReplaceVectorValueWithFullStore(
         IrInst& storeInst = function.instructions[instIndex];
         CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
 
-        if (!HAS_OP_E(storeInst))
-            storeInst.ops.push_back({});
+        if (storeInst.ops.size() < 5)
+            storeInst.ops.resize(5);
 
         replace(function, OP_E(storeInst), prevTagOp);
 
@@ -896,8 +897,8 @@ static bool tryReplaceVectorValueWithFullStore(
             IrInst& storeInst = function.instructions[instIndex];
             CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
 
-            if (!HAS_OP_E(storeInst))
-                storeInst.ops.push_back({});
+            if (storeInst.ops.size() < 5)
+                storeInst.ops.resize(5);
 
             replace(function, OP_E(storeInst), prevTagOp);
 
@@ -918,8 +919,8 @@ static bool tryReplaceVectorValueWithFullStore(
             IrInst& storeInst = function.instructions[instIndex];
             CODEGEN_ASSERT(storeInst.cmd == IrCmd::STORE_VECTOR);
 
-            if (!HAS_OP_E(storeInst))
-                storeInst.ops.push_back({});
+            if (storeInst.ops.size() < 5)
+                storeInst.ops.resize(5);
 
             replace(function, OP_E(storeInst), prevTagOp);
 
@@ -1122,7 +1123,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.tvalueInstIdx = index;
 
-            regInfo.knownTag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
+            regInfo.knownTag = HAS_OP_D(inst) && OP_D(inst).kind == IrOpKind::Constant
+                                   ? function.tagOp(OP_D(inst))
+                                   : tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
             regInfo.tagSourceInstIdx = ~0u;
             regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag);
 

@@ -143,7 +143,7 @@ void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, Regist
     build.and_(byteReg(tmp), byte[table + offsetof(LuaTable, nodemask8)]);
 
     // LuaNode* n = &h->node[slot];
-    build.shl(dwordReg(tmp), kLuaNodeSizeLog2);
+    scaleLuaNodeIndex(build, dwordReg(tmp));
     build.add(node, tmp);
 }
 
@@ -240,14 +240,28 @@ void callSetTable(IrRegAllocX64& regs, AssemblyBuilderX64& build, int rb, Operan
     emitUpdateBase(build);
 }
 
-void checkObjectBarrierConditions(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 object, RegisterX64 ra, IrOp raOp, int ratag, Label& skip)
+void checkObjectBarrierConditions(
+    AssemblyBuilderX64& build,
+    RegisterX64 tmp,
+    RegisterX64 object,
+    RegisterX64 ra,
+    IrOp raOp,
+    int ratag,
+    Label& skip,
+    RegisterX64 tagReg
+)
 {
     // Barrier should've been optimized away if we know that it's not collectable, checking for correctness
     if (ratag == -1 || !isGCO(ratag))
     {
         // iscollectable(ra)
-        if (raOp.kind == IrOpKind::Inst)
+        if (tagReg != noreg)
         {
+            build.cmp(tagReg, LUA_TSTRING);
+        }
+        else if (raOp.kind == IrOpKind::Inst)
+        {
+            CODEGEN_ASSERT(sizeof(TValue) == 16);
             build.vpextrd(dwordReg(tmp), ra, 3);
             build.cmp(dwordReg(tmp), LUA_TSTRING);
         }
@@ -278,12 +292,21 @@ void checkObjectBarrierConditions(AssemblyBuilderX64& build, RegisterX64 tmp, Re
     build.jcc(ConditionX64::Zero, skip);
 }
 
-void callBarrierObject(IrRegAllocX64& regs, AssemblyBuilderX64& build, RegisterX64 object, IrOp objectOp, RegisterX64 ra, IrOp raOp, int ratag)
+void callBarrierObject(
+    IrRegAllocX64& regs,
+    AssemblyBuilderX64& build,
+    RegisterX64 object,
+    IrOp objectOp,
+    RegisterX64 ra,
+    IrOp raOp,
+    int ratag,
+    RegisterX64 tagReg
+)
 {
     Label skip;
 
     ScopedRegX64 tmp{regs, SizeX64::qword};
-    checkObjectBarrierConditions(build, tmp.reg, object, ra, raOp, ratag, skip);
+    checkObjectBarrierConditions(build, tmp.reg, object, ra, raOp, ratag, skip, tagReg);
 
     {
         ScopedSpills spillGuard(regs);

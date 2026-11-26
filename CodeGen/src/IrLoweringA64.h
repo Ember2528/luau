@@ -46,7 +46,19 @@ struct IrLoweringA64
     void allocAndIncrementCounterAt(CodeGenCounter kind, uint32_t pcpos);
     void incrementCounterAt(size_t offset);
 
-    void checkObjectBarrierConditions(RegisterA64 object, RegisterA64 temp, RegisterA64 ra, IrOp raOp, int ratag, Label& skip);
+    void checkObjectBarrierConditions(
+        RegisterA64 object,
+        RegisterA64 temp,
+        RegisterA64 ra,
+        IrOp raOp,
+        int ratag,
+        Label& skip,
+        RegisterA64 tagReg = noreg
+    );
+    bool emitBuiltin(int bfid, int res, int arg, int nresults);
+#if LUA_VECTOR_SIZE == 4
+    void packFloat4(RegisterA64 dst, IrOp x, IrOp y, IrOp z, IrOp w);
+#endif
 
     // Operand data build helpers
     // May emit data/address synthesis instructions
@@ -55,7 +67,8 @@ struct IrLoweringA64
     RegisterA64 tempInt(IrOp op);
     RegisterA64 tempInt64(IrOp op);
     RegisterA64 tempUint(IrOp op);
-    AddressA64 tempAddr(IrOp op, int offset, RegisterA64 tempStorage = noreg); // Existing temporary register can be provided
+    AddressA64 tempAddr(IrOp op, int offset, RegisterA64 tempStorage = noreg, unsigned accessSize = 4); // Existing temporary register can be provided
+    AddressA64 tempTagAddr(IrOp op, AddressA64 payloadAddr, int addrOffset = 0, RegisterA64 tempStorage = noreg);
     AddressA64 tempAddrBuffer(IrOp bufferOp, IrOp indexOp, uint8_t tag);
 
     // May emit restore instructions

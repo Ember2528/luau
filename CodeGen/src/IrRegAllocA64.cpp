@@ -26,8 +26,6 @@ static const int8_t kInvalidSpill = 64;
 
 static int allocSpill(uint64_t& free, KindA64 kind)
 {
-    CODEGEN_ASSERT(kStackSize <= 256); // to support larger stack frames, we need to ensure qN is allocated at 16b boundary to fit in ldr/str encoding
-
     uint64_t search = free;
 
     // qN registers use two consecutive slots
@@ -35,6 +33,14 @@ static int allocSpill(uint64_t& free, KindA64 kind)
     {
         // Make sure bit N is set only if bit N+1 is also set
         search = free & (free >> 1);
+
+        // Past the unscaled immediate range, SIMD spills need a 16-byte aligned offset.
+        if constexpr (kStackSize > 256)
+        {
+            static_assert(sSpillArea.data % 16 == 0);
+            constexpr uint64_t largeOffsets = ~0ull << ((256 - sSpillArea.data) / 8);
+            search &= ~(largeOffsets & 0xaaaaaaaaaaaaaaaaull);
+        }
 
         // Prevent qN from allocating at stack/extra spill storage boundary (by reserving last stack slot)
         search &= ~(1ull << (kSpillSlots - 1));
@@ -92,6 +98,21 @@ static AddressA64 getReloadAddress(ValueRestoreLocation location)
 {
     IrOp op = location.op;
 
+    if constexpr (sizeof(TValue) > 16)
+    {
+        int offset = op.index * sizeof(TValue) + getReloadOffset(location.kind);
+        int size = location.kind == IrValueKind::Tvalue ? 16 : location.kind == IrValueKind::Tag || location.kind == IrValueKind::Int ? 4 : 8;
+
+        // A committed SIMD value can be reloaded through a temporary address when
+        // its 24-byte slot is not aligned for the scaled load instruction.
+        bool canMaterializeAddress = !location.lazy && location.kind == IrValueKind::Tvalue && op.kind == IrOpKind::VmReg;
+        if (offset > 255 && (offset % size != 0 || unsigned(offset / size) > AddressA64::kMaxOffset) && !canMaterializeAddress)
+            return AddressA64(xzr);
+        // Materializing any lazy wide-layout spill also writes a nil tag using a 32-bit store.
+        if (location.lazy && (op.index * sizeof(TValue) + offsetof(TValue, tt)) / 4 > AddressA64::kMaxOffset)
+            return AddressA64(xzr);
+    }
+
     if (op.kind == IrOpKind::VmReg)
         return mem(rBase, vmRegOp(op) * sizeof(TValue) + getReloadOffset(location.kind));
 
@@ -100,21 +121,6 @@ static AddressA64 getReloadAddress(ValueRestoreLocation location)
         return mem(rConstants, vmConstOp(op) * sizeof(TValue) + getReloadOffset(location.kind));
 
     return AddressA64(xzr); // dummy
-}
-
-static void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src, size_t offset)
-{
-    CODEGEN_ASSERT(dst != src);
-
-    if (offset <= AssemblyBuilderA64::kMaxImmediate)
-    {
-        build.add(dst, src, uint16_t(offset));
-    }
-    else
-    {
-        build.mov(dst, int(offset));
-        build.add(dst, dst, src);
-    }
 }
 
 IrRegAllocA64::IrRegAllocA64(
@@ -604,6 +610,13 @@ void IrRegAllocA64::restore(const IrRegAllocA64::Spill& s, RegisterA64 reg)
             // Temporary might have taken a spot needed for other registers in spill restore process
             freeTemp(temp);
         }
+        else if (sizeof(TValue) > 16 && reg.kind == KindA64::q && addr.data > 255 && addr.data % 16 != 0)
+        {
+            RegisterA64 temp = allocTemp(KindA64::x);
+            emitAddOffset(build, temp, addr.base, size_t(addr.data));
+            build.ldr(reg, mem(temp));
+            freeTemp(temp);
+        }
         else
         {
             build.ldr(reg, addr);
@@ -642,7 +655,7 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool
     {
         // instead of spilling the register to never reload it, we assume the register is not needed anymore
     }
-    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true))
+    else if (function.hasRestoreLocation(def, /*limitToCurrentBlock*/ true) && getReloadAddress(function.findRestoreLocation(def, true)).base != xzr)
     {
         ValueRestoreLocation loc = function.findRestoreLocation(def, true);
 
@@ -657,8 +670,9 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool
 
             build.str(def.regA64, addr);
 
-            // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag
-            if (loc.kind != IrValueKind::Tvalue)
+            // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag.
+            // On 24-byte TValue, even a Tvalue payload store omits 'tt' and must clear the tag.
+            if (sizeof(TValue) > 16 || loc.kind != IrValueKind::Tvalue)
                 build.str(wzr, mem(rBase, storeReg * sizeof(TValue) + offsetof(TValue, tt)));
 
             if (!keepLazyLocations)

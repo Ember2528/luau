@@ -42,7 +42,10 @@ inline constexpr RegisterX64 rNativeContext = r13; // NativeContext* context
 inline constexpr RegisterX64 rConstants = r12;     // TValue* k
 
 inline constexpr unsigned kExtraLocals = 3; // Number of 8 byte slots available for specialized local variables specified below
-inline constexpr unsigned kSpillSlots = 23; // Number of 8 byte slots available for register allocator to spill data into
+// Inline four-wide vectors keep the tag outside of the 16-byte payload.  A few
+// generic TValue operations therefore need one extra live integer value; keep
+// two additional slots so that the stack frame remains 16-byte aligned.
+inline constexpr unsigned kSpillSlots = sizeof(TValue) == 24 ? 25 : 23;
 static_assert((kExtraLocals + kSpillSlots) * 8 % 16 == 0, "locals have to preserve 16 byte alignment");
 
 inline constexpr uint8_t kWindowsFirstNonVolXmmReg = 6;
@@ -157,12 +160,82 @@ inline OperandX64 luauNodeKeyTag(RegisterX64 node)
     return dword[node + offsetof(LuaNode, key) + kOffsetOfTKeyTagNext];
 }
 
+inline void scaleTValueIndex(AssemblyBuilderX64& build, RegisterX64 reg)
+{
+    if constexpr (sizeof(TValue) == 16)
+        build.shl(reg, kTValueSizeLog2);
+    else
+        build.imul(reg, reg, int32_t(sizeof(TValue)));
+}
+
+inline void unscaleTValueBytes(AssemblyBuilderX64& build, RegisterX64 reg)
+{
+    static_assert(sizeof(void*) != 8 || sizeof(TValue) == 16 || sizeof(TValue) == 24, "unsupported TValue stride");
+
+    if constexpr (sizeof(TValue) == 16)
+    {
+        build.shr(reg, kTValueSizeLog2);
+    }
+    else
+    {
+        // For byte counts 24*n, 24*0x0aaaaaab = 2^32+8 makes the shifted
+        // product exactly n for 0 <= n < 2^29 (byte counts below 12 GiB).
+        // Both callers use non-negative stack byte counts within this bound;
+        // luaD_reallocstack limits the stack to about 1 GiB.
+        build.imul(qwordReg(reg), qwordReg(reg), 0x0aaaaaab);
+        build.shr(qwordReg(reg), 32);
+    }
+}
+
+inline void scaleLuaNodeIndex(AssemblyBuilderX64& build, RegisterX64 reg)
+{
+    if constexpr (sizeof(LuaNode) == 32)
+        build.shl(reg, kLuaNodeSizeLog2);
+    else
+        build.imul(reg, reg, int32_t(sizeof(LuaNode)));
+}
+
+inline OperandX64 memoryOperand(OperandX64 op, SizeX64 size, int32_t offset = 0)
+{
+    CODEGEN_ASSERT(op.cat == CategoryX64::mem);
+    op.memSize = size;
+    op.imm += offset;
+    return op;
+}
+
+inline void copyTValue(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 tmpTag, OperandX64 dst, OperandX64 src)
+{
+    CODEGEN_ASSERT(tmp.size == SizeX64::xmmword);
+    CODEGEN_ASSERT(tmpTag == noreg || tmpTag.size == SizeX64::dword);
+
+    build.vmovups(tmp, memoryOperand(src, SizeX64::xmmword));
+    build.vmovups(memoryOperand(dst, SizeX64::xmmword), tmp);
+
+    if constexpr (sizeof(TValue) > 16)
+    {
+        if (tmpTag != noreg)
+        {
+            build.mov(tmpTag, memoryOperand(src, SizeX64::dword, offsetof(TValue, tt)));
+            build.mov(memoryOperand(dst, SizeX64::dword, offsetof(TValue, tt)), tmpTag);
+        }
+        else
+        {
+            build.vmovss(tmp, memoryOperand(src, SizeX64::dword, offsetof(TValue, tt)));
+            build.vmovss(memoryOperand(dst, SizeX64::dword, offsetof(TValue, tt)), tmp);
+        }
+    }
+}
+
+inline void copyTValue(AssemblyBuilderX64& build, RegisterX64 tmp, OperandX64 dst, OperandX64 src)
+{
+    copyTValue(build, tmp, noreg, dst, src);
+}
+
 inline void setLuauReg(AssemblyBuilderX64& build, RegisterX64 tmp, int ri, OperandX64 op)
 {
     CODEGEN_ASSERT(op.cat == CategoryX64::mem);
 
-    build.vmovups(tmp, op);
-    build.vmovups(luauReg(ri), tmp);
+    copyTValue(build, tmp, luauReg(ri), op);
 }
 
 inline void jumpIfTagIs(AssemblyBuilderX64& build, int ri, lua_Type tag, Label& label)
@@ -208,9 +281,27 @@ void callArithHelper(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, Ope
 void callLengthHelper(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int rb);
 void callGetTable(IrRegAllocX64& regs, AssemblyBuilderX64& build, int rb, OperandX64 c, int ra);
 void callSetTable(IrRegAllocX64& regs, AssemblyBuilderX64& build, int rb, OperandX64 c, int ra);
-void checkObjectBarrierConditions(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 object, RegisterX64 ra, IrOp raOp, int ratag, Label& skip);
+void checkObjectBarrierConditions(
+    AssemblyBuilderX64& build,
+    RegisterX64 tmp,
+    RegisterX64 object,
+    RegisterX64 ra,
+    IrOp raOp,
+    int ratag,
+    Label& skip,
+    RegisterX64 tagReg = noreg
+);
 void checkObjectBarrierConditions_DEPRECATED(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 object, IrOp ra, int ratag, Label& skip);
-void callBarrierObject(IrRegAllocX64& regs, AssemblyBuilderX64& build, RegisterX64 object, IrOp objectOp, RegisterX64 ra, IrOp raOp, int ratag);
+void callBarrierObject(
+    IrRegAllocX64& regs,
+    AssemblyBuilderX64& build,
+    RegisterX64 object,
+    IrOp objectOp,
+    RegisterX64 ra,
+    IrOp raOp,
+    int ratag,
+    RegisterX64 tagReg = noreg
+);
 void callBarrierObject_DEPRECATED(IrRegAllocX64& regs, AssemblyBuilderX64& build, RegisterX64 object, IrOp objectOp, IrOp ra, int ratag);
 void callBarrierTableFast(IrRegAllocX64& regs, AssemblyBuilderX64& build, RegisterX64 table, IrOp tableOp);
 void callStepGc(IrRegAllocX64& regs, AssemblyBuilderX64& build);

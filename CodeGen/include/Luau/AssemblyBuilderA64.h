@@ -184,6 +184,8 @@ public:
     void ins_4s(RegisterA64 dst, uint8_t dstIndex, RegisterA64 src, uint8_t srcIndex);
     void dup_4s(RegisterA64 dst, RegisterA64 src, uint8_t index);
     void umov_4s(RegisterA64 dst, RegisterA64 src, uint8_t index);
+    void zip1_4s(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2);
+    void zip1_2d(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2);
 
     void fcmeq_4s(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2);
     void fcmgt_4s(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2);

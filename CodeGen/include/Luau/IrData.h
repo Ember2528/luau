@@ -52,7 +52,8 @@ enum class IrCmd : uint8_t
     NOP,
 
     // Load a tag from TValue
-    // A: Rn or Kn
+    // A: Rn or Kn or pointer (TValue)
+    // B: int/none (optional 'A' pointer offset)
     LOAD_TAG,
 
     // Load a pointer (*) from TValue
@@ -72,10 +73,10 @@ enum class IrCmd : uint8_t
     // B: int (offset from the start of TValue)
     LOAD_FLOAT,
 
-    // Load a TValue from memory
+    // Load the 128-bit TValue payload from memory; the tag is separate in wider layouts
     // A: Rn or Kn or pointer (TValue)
     // B: int/none (optional 'A' pointer offset)
-    // C: tag/none (tag of the value being loaded)
+    // C: tag/none (known tag metadata, not part of the load)
     LOAD_TVALUE,
 
     // Load current environment table
@@ -135,12 +136,14 @@ enum class IrCmd : uint8_t
     // C: float (y)
     // D: float (z)
     // E: tag (optional)
+    // F: float (w, optional; defaults to zero in four-component builds)
     STORE_VECTOR,
 
     // Store a TValue into memory
     // A: Rn or pointer (TValue)
     // B: TValue
     // C: int (optional 'A' pointer offset)
+    // D: tag (optional; required when the tag isn't embedded in B)
     STORE_TVALUE,
 
     // Store a pair of tag and value into memory
@@ -304,7 +307,15 @@ enum class IrCmd : uint8_t
     // A: TValue
     // B: TValue (if true)
     // C: TValue (if false)
+    // D: tag (optional; required when the tag isn't embedded in A)
     SELECT_IF_TRUTHY,
+
+    // Select one of the tags based on the truthyness of (A, B)
+    // A: tag (condition)
+    // B: TValue (condition payload)
+    // C: tag (if true)
+    // D: tag (if false)
+    SELECT_TAG_IF_TRUTHY,
 
     // Add/Sub/Mul/Div/Idiv two vectors
     // A, B: TValue (vector)
@@ -494,6 +505,7 @@ enum class IrCmd : uint8_t
     // A: double (x)
     // B: double (y)
     // C: double (z)
+    // D: double (w in four-component builds, optional; defaults to zero)
     NEW_VECTOR,
 
     // Convert integer into a double number
@@ -535,6 +547,13 @@ enum class IrCmd : uint8_t
     // Converts a float number to a vector with the value in X/Y/Z (use NUM_TO_FLOAT to convert from double)
     // A: float
     FLOAT_TO_VEC,
+
+    // Packs four float components into a vector TValue payload register (four-component builds)
+    // A: float
+    // B: float
+    // C: float
+    // D: float
+    BUILD_VEC,
 
     // Adds VECTOR type tag to a vector, preserving X/Y/Z components
     // A: TValue
@@ -651,6 +670,11 @@ enum class IrCmd : uint8_t
     // Load function upvalue
     // A: UPn
     GET_UPVALUE,
+
+    // Resolve a function upvalue to its TValue address (inline or through UpVal.v)
+    // Consume before an operation that can close upvalues or move the stack.
+    // A: UPn
+    GET_UPVALUE_ADDR,
 
     // Store TValue into a function upvalue
     // A: UPn

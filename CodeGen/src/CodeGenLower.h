@@ -244,6 +244,13 @@ inline bool lowerImpl(
                 toStringDetailed(ctx, block, blockIndex, inst, index, options.includeUseInfo);
             }
 
+            // A wide TValue's SIMD payload does not contain its tag. Catch incomplete
+            // whole-value stores and upvalue writes from translation, optimizations or host IR hooks.
+            CODEGEN_ASSERT(sizeof(TValue) == 16 || inst.cmd != IrCmd::STORE_TVALUE || HAS_OP_D(inst));
+            CODEGEN_ASSERT(
+                sizeof(TValue) == 16 || inst.cmd != IrCmd::SET_UPVALUE || OP_C(inst).kind == IrOpKind::Constant || OP_C(inst).kind == IrOpKind::Inst
+            );
+
             lowering.lowerInst(inst, index, nextBlock);
 
             if (lowering.hasError())

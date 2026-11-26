@@ -192,6 +192,7 @@ public:
     void vblendvpd(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, RegisterX64 mask);
 
     void vpshufps(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, uint8_t shuffle);
+    void vinsertps(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, uint8_t control);
     void vpinsrd(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, uint8_t offset);
     void vpextrd(RegisterX64 dst, RegisterX64 src, uint8_t offset);
 
