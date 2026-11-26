@@ -13,7 +13,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if LUA_T16_NANTAG_VEC4
+const TValue luaO_nilobject_ = {{NULL}, {0}, {kNaNTagBase | uint32_t(LUA_TNIL)}};
+#else
 const TValue luaO_nilobject_ = {{NULL}, {0}, LUA_TNIL};
+#endif
 
 int luaO_log2(unsigned int x)
 {

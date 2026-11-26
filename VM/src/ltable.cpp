@@ -42,6 +42,13 @@
 #define MAXBITS 26
 #define MAXSIZE (1 << MAXBITS)
 
+#if LUA_T16_NANTAG_VEC4
+static_assert(
+    (kVectorKeySidecarOwnedMask & (WHITEBITS | bitmask(BLACKBIT) | bitmask(FIXEDBIT))) == 0,
+    "vector-key sidecar flag overlaps collector metadata"
+);
+#endif
+
 static_assert(offsetof(LuaNode, val) == 0, "Unexpected Node memory layout, pointer cast in gval2slot is incorrect");
 
 // TKey is bitpacked for memory efficiency so we need to validate bit counts for worst case
@@ -51,7 +58,11 @@ static_assert(TKey{{NULL}, {0}, LUA_TNIL, -(MAXSIZE - 1)}.next == -(MAXSIZE - 1)
 
 // empty hash data points to dummynode so that we can always dereference it
 const LuaNode luaH_dummynode = {
-    {{NULL}, {0}, LUA_TNIL},   // value
+#if LUA_T16_NANTAG_VEC4
+    {{NULL}, {0}, {kNaNTagBase | uint32_t(LUA_TNIL)}}, // value
+#else
+    {{NULL}, {0}, LUA_TNIL}, // value
+#endif
     {{NULL}, {0}, LUA_TNIL, 0} // key
 };
 
@@ -110,7 +121,7 @@ static LuaNode* hashnum(const LuaTable* t, double n)
     return hashpow2(t, h2);
 }
 
-LUAU_MAYBE_UNUSED static LuaNode* hashvec(const LuaTable* t, const float* v)
+LUAU_MAYBE_UNUSED static unsigned int vectorhashfloat(const float* v)
 {
     unsigned int i[LUA_VECTOR_SIZE];
     memcpy(i, v, sizeof(i));
@@ -137,7 +148,12 @@ LUAU_MAYBE_UNUSED static LuaNode* hashvec(const LuaTable* t, const float* v)
     h ^= i[3] * 39916801;
 #endif
 
-    return hashpow2(t, h);
+    return h;
+}
+
+LUAU_MAYBE_UNUSED static LuaNode* hashvec(const LuaTable* t, const float* v)
+{
+    return hashpow2(t, vectorhashfloat(v));
 }
 
 static LUAU_MAYBE_UNUSED LuaNode* hashvec(const LuaTable* t, const double* v)
@@ -217,11 +233,13 @@ LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TNUMBER>(const LuaTable* t, dou
     return hashnum(t, key);
 }
 
+#if !LUA_T16_NANTAG_VEC4
 template<>
 LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TVECTOR>(const LuaTable* t, const LUA_VECTOR_TYPE* key)
 {
     return hashvec(t, key);
 }
+#endif
 
 template<>
 LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TSTRING>(const LuaTable* t, TString* key)
@@ -585,11 +603,15 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
     t->lsizenode = cast_byte(lsize);
     t->nodemask8 = cast_byte((1 << lsize) - 1);
     t->lastfree = size; // all positions are free
+    luauSetVectorKeySidecarOwned(t, false);
 }
 
 static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool checkarraypart);
+#if LUA_T16_NANTAG_VEC4
+static TValue* reinsertvector_nantag(lua_State* L, LuaTable* t, const LuaNode* old, LuauVectorKeySlot* destSidecar);
+#endif
 
-static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize, bool wantVectorSidecar = false)
 {
     LUAU_ASSERT(!hasmetacache(t));
 
@@ -613,6 +635,23 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
     int oldsizenode = twoto(t->lsizenode);
     TValue* oldarray = t->array;
     LuaNode* oldnode = t->node;
+#if LUA_T16_NANTAG_VEC4
+    bool oldHasSidecar = luauHasVectorKeySidecar(t);
+    bool newHasSidecar = wantVectorSidecar;
+    if (!newHasSidecar && oldHasSidecar)
+    {
+        for (int i = 0; i < oldsizenode; ++i)
+        {
+            if (!ttisnil(gval(oldnode + i)) && ttisvector(gkey(oldnode + i)))
+            {
+                newHasSidecar = true;
+                break;
+            }
+        }
+    }
+#else
+    (void)wantVectorSidecar;
+#endif
 
     TValue* newarray = t->array;
 
@@ -642,10 +681,15 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 
     if (nhsize != 0)
     {
-        // if we allocated a new array part, we have to be careful to with hash part allocation failure
+#if LUA_T16_NANTAG_VEC4
+        size_t nodeBytes = luaM_arraysize_(L, size_t(nhsize), luauNodeStorageBytes(1, newHasSidecar));
+#else
+        size_t nodeBytes = luaM_arraysize_(L, size_t(nhsize), sizeof(LuaNode));
+#endif
+        // if we allocated a new array part, we have to be careful with hash part allocation failure
         if (oldarray != newarray)
         {
-            newnode = luaM_trynewarray(L, nhsize, LuaNode, t->memcat);
+            newnode = static_cast<LuaNode*>(luaM_trynew_(L, nodeBytes, t->memcat));
 
             if (newnode == nullptr)
             {
@@ -655,7 +699,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         }
         else
         {
-            newnode = luaM_newarray(L, nhsize, LuaNode, t->memcat);
+            newnode = static_cast<LuaNode*>(luaM_new_(L, nodeBytes, t->memcat));
         }
 
         for (int i = 0; i < nhsize; i++)
@@ -672,6 +716,10 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
     t->sizearray = nasize;
 
     t->node = newnode;
+#if LUA_T16_NANTAG_VEC4
+    luauSetVectorKeySidecarOwned(t, nhsize != 0 && newHasSidecar);
+    LuauVectorKeySlot* destSidecar = nhsize && newHasSidecar ? luauVectorKeySidecar(newnode, nhsize) : nullptr;
+#endif
     t->lsizenode = cast_byte(lsizenode);
     t->nodemask8 = cast_byte((1 << lsizenode) - 1);
     t->lastfree = nhsize; // all positions are free
@@ -694,6 +742,14 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
         LuaNode* old = oldnode + i;
         if (!ttisnil(gval(old)))
         {
+#if LUA_T16_NANTAG_VEC4
+            if (old->key.tt == LUA_TVECTOR)
+            {
+                // Migrate vector keys in the sidecar with zero allocation and cached hash reuse.
+                setobjt2t(L, reinsertvector_nantag(L, t, old, destSidecar), gval(old));
+                continue;
+            }
+#endif
             TValue ok;
             getnodekey(L, &ok, old);
             setobjt2t(L, reinsertkey(L, t, &ok, true), gval(old));
@@ -710,7 +766,13 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
 
     // free old node
     if (oldnode != dummynode)
+    {
+#if LUA_T16_NANTAG_VEC4
+        luaM_free_(L, oldnode, luauNodeStorageBytes(oldsizenode, oldHasSidecar), t->memcat);
+#else
         luaM_freearray(L, oldnode, oldsizenode, LuaNode, t->memcat);
+#endif
+    }
 }
 
 // When we already know that new key is an integer number
@@ -831,7 +893,13 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
 void luaH_free(lua_State* L, LuaTable* t, lua_Page* page)
 {
     if (t->node != dummynode)
+    {
+#if LUA_T16_NANTAG_VEC4
+        luaM_free_(L, t->node, luauNodeStorageBytes(sizenode(t), luauHasVectorKeySidecar(t)), t->memcat);
+#else
         luaM_freearray(L, t->node, sizenode(t), LuaNode, t->memcat);
+#endif
+    }
 
     if (t->array)
     {
@@ -861,9 +929,23 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
 {
     LUAU_ASSERT(n != dummynode);
 
+#if LUA_T16_NANTAG_VEC4
+    LuaNode* othern;
+    if (mp->key.tt == LUA_TVECTOR)
+    {
+        othern = hashpow2(t, uint32_t(mp->key.extra[0]));
+    }
+    else
+    {
+        TValue mk;
+        getnodekey(L, &mk, mp);
+        othern = mainposition(t, &mk);
+    }
+#else
     TValue mk;
     getnodekey(L, &mk, mp);
     LuaNode* othern = mainposition(t, &mk);
+#endif
 
     // is colliding node out of its main position?
     if (othern != mp)
@@ -874,6 +956,16 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
 
         gnext(othern) = cast_int(n - othern); // redo the chain with `n' in place of `mp'
         *n = *mp;                             // copy colliding node into free pos. (mp->next also goes)
+#if LUA_T16_NANTAG_VEC4
+        if (mp->key.tt == LUA_TVECTOR)
+        {
+            LUAU_ASSERT(luauHasVectorKeySidecar(t));
+            LuauVectorKeySlot* sidecar = luauVectorKeySidecar(t->node, sizenode(t));
+            ptrdiff_t newIdx = n - t->node;
+            memcpy(sidecar[newIdx].v, mp->key.value.p, sizeof(LuauVectorKeySlot));
+            n->key.value.p = sidecar[newIdx].v;
+        }
+#endif
 
         if (gnext(mp) != 0)
         {
@@ -896,6 +988,53 @@ static LuaNode* newcollidingkey(lua_State* L, LuaTable* t, LuaNode* mp, LuaNode*
         return n;
     }
 }
+
+#if LUA_T16_NANTAG_VEC4
+static LUAU_FORCEINLINE void writeInlineVectorKeySlot(LuaTable* t, LuaNode* node, LuauVectorKeySlot* sidecar, const float* src, uint32_t h)
+{
+    ptrdiff_t slot = node - t->node;
+    memcpy(sidecar[slot].v, src, sizeof(LuauVectorKeySlot));
+    node->key.value.p = sidecar[slot].v;
+    node->key.extra[0] = int(h);
+    node->key.tt = LUA_TVECTOR;
+}
+
+static LUAU_NOINLINE TValue* newvectorkey_nantag(lua_State* L, LuaTable* t, const float* v)
+{
+    // Copy lanes onto stack before any resize in case v aliases a table or VM stack slot.
+    float vcopy[4];
+    memcpy(vcopy, v, sizeof(vcopy));
+    uint32_t h = vectorhashfloat(vcopy);
+
+    if (LUAU_UNLIKELY(!luauHasVectorKeySidecar(t)))
+    {
+        int used = t->node == dummynode ? 0 : hashslotsused(t);
+        int nh = t->node == dummynode ? 1 : (sizenode(t) > used ? sizenode(t) : used + 1);
+        resize(L, t, t->sizearray, nh, /*wantVectorSidecar=*/true);
+    }
+
+    LuaNode* mp = hashpow2(t, h);
+    if (!ttisnil(gval(mp)))
+    {
+        LuaNode* n = getfreepos(t);
+        if (n == nullptr)
+        {
+            resize(L, t, t->sizearray, hashslotsused(t) + 1, /*wantVectorSidecar=*/true);
+            mp = hashpow2(t, h);
+            if (!ttisnil(gval(mp)))
+                mp = newcollidingkey(L, t, mp, getfreepos(t));
+        }
+        else
+        {
+            mp = newcollidingkey(L, t, mp, n);
+        }
+    }
+
+    writeInlineVectorKeySlot(t, mp, luauVectorKeySidecar(t->node, sizenode(t)), vcopy, h);
+    LUAU_ASSERT(ttisnil(gval(mp)));
+    return gval(mp);
+}
+#endif
 
 /*
 ** inserts a new key into a hash table; first, check whether key's main
@@ -972,6 +1111,21 @@ static TValue* reinsertkey(lua_State* L, LuaTable* t, const TValue* key, bool ch
     return gval(mp);
 }
 
+#if LUA_T16_NANTAG_VEC4
+static TValue* reinsertvector_nantag(lua_State* L, LuaTable* t, const LuaNode* old, LuauVectorKeySlot* destSidecar)
+{
+    LUAU_ASSERT(old->key.tt == LUA_TVECTOR && t->node != dummynode && destSidecar != nullptr);
+    uint32_t h = uint32_t(old->key.extra[0]);
+    LuaNode* mp = hashpow2(t, h);
+    if (!ttisnil(gval(mp)))
+        mp = newcollidingkey(L, t, mp, getfreepos(t));
+
+    writeInlineVectorKeySlot(t, mp, destSidecar, static_cast<const float*>(old->key.value.p), h);
+    LUAU_ASSERT(ttisnil(gval(mp)));
+    return gval(mp);
+}
+#endif
+
 /*
 ** search function for integers
 */
@@ -1033,6 +1187,27 @@ const TValue* luaH_getp(LuaTable* t, void* key, int tag)
     return luaO_nilobject;
 }
 
+#if LUA_T16_NANTAG_VEC4
+static LUAU_FORCEINLINE const TValue* getvector_nantag(const LuaTable* t, const float* v, uint32_t h)
+{
+    LuaNode* node = hashpow2(t, h);
+    for (;;)
+    {
+        if (uint32_t(node->key.extra[0]) == h && node->key.tt == LUA_TVECTOR && luai_veceq(static_cast<const float*>(node->key.value.p), v))
+            return gval(node);
+        int next = gnext(node);
+        if (next == 0)
+            return luaO_nilobject;
+        node += next;
+    }
+}
+
+const TValue* luaH_getvectorinline(const LuaTable* t, const float* v)
+{
+    return getvector_nantag(t, v, vectorhashfloat(v));
+}
+#endif
+
 /*
 ** main search function
 */
@@ -1057,7 +1232,13 @@ const TValue* luaH_get(LuaTable* t, const TValue* key)
         return chainsearchtagged<LUA_TNUMBER>(t, nvalue(key), LUA_TNUMBER);
     }
     case LUA_TVECTOR:
+#if LUA_T16_NANTAG_VEC4
+        if (LUAU_UNLIKELY(!luauIsInlineVector(key)))
+            return luaO_nilobject;
+        return luaH_getvectorinline(t, reinterpret_cast<const float*>(key));
+#else
         return chainsearchtagged<LUA_TVECTOR>(t, (const LUA_VECTOR_TYPE*)vvalue(key), LUA_TVECTOR);
+#endif
     case LUA_TSTRING:
         return luaH_getstr(t, tsvalue(key));
     default:
@@ -1104,7 +1285,12 @@ TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
         if (luai_vecisnan(vvalue(key)))
             luaG_runerror(L, "table index contains NaN");
 
+#if LUA_T16_NANTAG_VEC4
+        LUAU_ASSERT(luauIsInlineVector(key));
+        return newvectorkey_nantag(L, t, reinterpret_cast<const float*>(key));
+#else
         return newkeytagged<LUA_TVECTOR, false>(L, t, key, (const LUA_VECTOR_TYPE*)vvalue(key), -1);
+#endif
     case LUA_TSTRING:
         return newkeytagged<LUA_TSTRING, false>(L, t, key, tsvalue(key), -1);
     default:
@@ -1249,10 +1435,32 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
     if (tt->node != dummynode)
     {
         int size = 1 << tt->lsizenode;
+#if LUA_T16_NANTAG_VEC4
+        if (LUAU_LIKELY(!luauHasVectorKeySidecar(tt)))
+        {
+            t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+            memcpy(t->node, tt->node, size * sizeof(LuaNode));
+        }
+        else
+        {
+            size_t nodeBytes = luaM_arraysize_(L, size_t(size), luauNodeStorageBytes(1, true));
+            LuaNode* newnode = static_cast<LuaNode*>(luaM_new_(L, nodeBytes, t->memcat));
+            memcpy(newnode, tt->node, nodeBytes);
+            LuauVectorKeySlot* newSidecar = luauVectorKeySidecar(newnode, size);
+            for (int i = 0; i < size; ++i)
+            {
+                if (newnode[i].key.tt == LUA_TVECTOR)
+                    newnode[i].key.value.p = newSidecar[i].v;
+            }
+            t->node = newnode;
+            luauSetVectorKeySidecarOwned(t, true);
+        }
+#else
         t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+        memcpy(t->node, tt->node, size * sizeof(LuaNode));
+#endif
         t->lsizenode = tt->lsizenode;
         t->nodemask8 = tt->nodemask8;
-        memcpy(t->node, tt->node, size * sizeof(LuaNode));
         t->lastfree = tt->lastfree;
     }
 

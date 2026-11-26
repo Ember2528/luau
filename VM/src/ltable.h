@@ -20,6 +20,9 @@ LUAI_FUNC const TValue* luaH_getstr(LuaTable* t, TString* key);
 LUAI_FUNC TValue* luaH_setstr(lua_State* L, LuaTable* t, TString* key);
 LUAI_FUNC const TValue* luaH_getp(LuaTable* t, void* key, int tag);
 LUAI_FUNC TValue* luaH_setp(lua_State* L, LuaTable* t, void* key, int tag);
+#if LUA_T16_NANTAG_VEC4
+LUAI_FUNC const TValue* luaH_getvectorinline(const LuaTable* t, const float* v);
+#endif
 LUAI_FUNC const TValue* luaH_get(LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key);

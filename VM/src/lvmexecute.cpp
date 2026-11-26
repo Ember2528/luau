@@ -18,6 +18,16 @@
 
 #include <string.h>
 
+#if LUA_T16_NANTAG_VEC4
+#if defined(__SSE2__) || (defined(_MSC_VER) && (defined(_M_X64) || _M_IX86_FP >= 2))
+#include <emmintrin.h>
+#define LUAU_VM_NANTAG_SSE2 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#define LUAU_VM_NANTAG_NEON 1
+#endif
+#endif
+
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
 LUAU_FASTFLAG(LuauRuntimeFeedback)
@@ -76,6 +86,86 @@ LUAU_FASTFLAG(LuauRuntimeFeedback)
 // a cheaper version of VM_PROTECT that can be called before the external call.
 #define VM_PROTECT_PC() L->ci->savedpc = pc
 #define VM_ASSERT_PC(pc) LUAU_ASSERT(unsigned(pc - L->ci->p->code) < unsigned(L->ci->p->sizecode));
+
+#if LUA_T16_NANTAG_VEC4
+#define VM_SETVECTOR(ra, x, y, z, w) \
+    do \
+    { \
+        float i_vx = float(x), i_vy = float(y), i_vz = float(z), i_vw = float(w); \
+        uint32_t i_wb; \
+        memcpy(&i_wb, &i_vw, sizeof(i_wb)); \
+        if (LUAU_LIKELY(i_wb < kNaNTagBase)) \
+        { \
+            float i_lanes[4] = {i_vx, i_vy, i_vz, i_vw}; \
+            memcpy((ra), i_lanes, sizeof(i_lanes)); \
+        } \
+        else \
+        { \
+            VM_PROTECT(luaV_setnanvec_slow(L, (ra), i_vx, i_vy, i_vz, i_vw)); \
+        } \
+    } while (0)
+
+#if defined(LUAU_VM_NANTAG_SSE2)
+#define VM_SETVECTOR_SIMD(ra, vecExpr) \
+    do \
+    { \
+        __m128 i_v = (vecExpr); \
+        uint32_t i_wb = uint32_t(_mm_cvtsi128_si32(_mm_shuffle_epi32(_mm_castps_si128(i_v), 0xff))); \
+        if (LUAU_LIKELY(i_wb < kNaNTagBase)) \
+            _mm_storeu_ps(reinterpret_cast<float*>(ra), i_v); \
+        else \
+        { \
+            float i_lanes[4]; \
+            _mm_storeu_ps(i_lanes, i_v); \
+            VM_PROTECT(luaV_setnanvec_slow(L, (ra), i_lanes[0], i_lanes[1], i_lanes[2], i_lanes[3])); \
+        } \
+    } while (0)
+#define VM_VEC_ADD(ra, vb, vc) VM_SETVECTOR_SIMD(ra, _mm_add_ps(_mm_loadu_ps(vb), _mm_loadu_ps(vc)))
+#define VM_VEC_SUB(ra, vb, vc) VM_SETVECTOR_SIMD(ra, _mm_sub_ps(_mm_loadu_ps(vb), _mm_loadu_ps(vc)))
+#define VM_VEC_MUL(ra, vb, vc) VM_SETVECTOR_SIMD(ra, _mm_mul_ps(_mm_loadu_ps(vb), _mm_loadu_ps(vc)))
+#define VM_VEC_DIV(ra, vb, vc) VM_SETVECTOR_SIMD(ra, _mm_div_ps(_mm_loadu_ps(vb), _mm_loadu_ps(vc)))
+#define VM_VEC_MULS(ra, vb, s) VM_SETVECTOR_SIMD(ra, _mm_mul_ps(_mm_loadu_ps(vb), _mm_set1_ps(float(s))))
+#define VM_VEC_DIVS(ra, vb, s) VM_SETVECTOR_SIMD(ra, _mm_div_ps(_mm_loadu_ps(vb), _mm_set1_ps(float(s))))
+#define VM_VEC_SDIV(ra, s, vc) VM_SETVECTOR_SIMD(ra, _mm_div_ps(_mm_set1_ps(float(s)), _mm_loadu_ps(vc)))
+#define VM_VEC_NEG(ra, vb) VM_SETVECTOR_SIMD(ra, _mm_xor_ps(_mm_loadu_ps(vb), _mm_set1_ps(-0.0f)))
+#elif defined(LUAU_VM_NANTAG_NEON)
+#define VM_SETVECTOR_SIMD(ra, vecExpr) \
+    do \
+    { \
+        float32x4_t i_v = (vecExpr); \
+        uint32_t i_wb = vgetq_lane_u32(vreinterpretq_u32_f32(i_v), 3); \
+        if (LUAU_LIKELY(i_wb < kNaNTagBase)) \
+            vst1q_f32(reinterpret_cast<float*>(ra), i_v); \
+        else \
+        { \
+            float i_lanes[4]; \
+            vst1q_f32(i_lanes, i_v); \
+            VM_PROTECT(luaV_setnanvec_slow(L, (ra), i_lanes[0], i_lanes[1], i_lanes[2], i_lanes[3])); \
+        } \
+    } while (0)
+#define VM_VEC_ADD(ra, vb, vc) VM_SETVECTOR_SIMD(ra, vaddq_f32(vld1q_f32(vb), vld1q_f32(vc)))
+#define VM_VEC_SUB(ra, vb, vc) VM_SETVECTOR_SIMD(ra, vsubq_f32(vld1q_f32(vb), vld1q_f32(vc)))
+#define VM_VEC_MUL(ra, vb, vc) VM_SETVECTOR_SIMD(ra, vmulq_f32(vld1q_f32(vb), vld1q_f32(vc)))
+#define VM_VEC_DIV(ra, vb, vc) VM_SETVECTOR_SIMD(ra, vdivq_f32(vld1q_f32(vb), vld1q_f32(vc)))
+#define VM_VEC_MULS(ra, vb, s) VM_SETVECTOR_SIMD(ra, vmulq_f32(vld1q_f32(vb), vdupq_n_f32(float(s))))
+#define VM_VEC_DIVS(ra, vb, s) VM_SETVECTOR_SIMD(ra, vdivq_f32(vld1q_f32(vb), vdupq_n_f32(float(s))))
+#define VM_VEC_SDIV(ra, s, vc) VM_SETVECTOR_SIMD(ra, vdivq_f32(vdupq_n_f32(float(s)), vld1q_f32(vc)))
+#define VM_VEC_NEG(ra, vb) VM_SETVECTOR_SIMD(ra, vnegq_f32(vld1q_f32(vb)))
+#endif
+#else
+#define VM_SETVECTOR(ra, x, y, z, w) setvvalue(L, (ra), (x), (y), (z), (w))
+#endif
+
+#ifndef VM_VEC_ADD
+#define VM_VEC_ADD(ra, vb, vc) VM_SETVECTOR(ra, (vb)[0] + (vc)[0], (vb)[1] + (vc)[1], (vb)[2] + (vc)[2], (vb)[3] + (vc)[3])
+#define VM_VEC_SUB(ra, vb, vc) VM_SETVECTOR(ra, (vb)[0] - (vc)[0], (vb)[1] - (vc)[1], (vb)[2] - (vc)[2], (vb)[3] - (vc)[3])
+#define VM_VEC_MUL(ra, vb, vc) VM_SETVECTOR(ra, (vb)[0] * (vc)[0], (vb)[1] * (vc)[1], (vb)[2] * (vc)[2], (vb)[3] * (vc)[3])
+#define VM_VEC_DIV(ra, vb, vc) VM_SETVECTOR(ra, (vb)[0] / (vc)[0], (vb)[1] / (vc)[1], (vb)[2] / (vc)[2], (vb)[3] / (vc)[3])
+#define VM_VEC_MULS(ra, vb, s) VM_SETVECTOR(ra, (vb)[0] * (s), (vb)[1] * (s), (vb)[2] * (s), (vb)[3] * (s))
+#define VM_VEC_DIVS(ra, vb, s) VM_SETVECTOR(ra, (vb)[0] / (s), (vb)[1] / (s), (vb)[2] / (s), (vb)[3] / (s))
+#define VM_VEC_SDIV(ra, s, vc) VM_SETVECTOR(ra, (s) / (vc)[0], (s) / (vc)[1], (s) / (vc)[2], (s) / (vc)[3])
+#define VM_VEC_NEG(ra, vb) VM_SETVECTOR(ra, -(vb)[0], -(vb)[1], -(vb)[2], -(vb)[3])
+#endif
 
 #define VM_REG(i) (LUAU_ASSERT(unsigned(i) < unsigned(L->top - base)), &base[i])
 #define VM_KV(i) (LUAU_ASSERT(unsigned(i) < unsigned(L->ci->p->sizek)), &k[i])
@@ -564,6 +654,21 @@ reentry:
                 }
                 else
                 {
+#if LUA_T16_NANTAG_VEC4
+                    // fast-path: inline vector component access (avoids userdata checks & escaped-vector branch)
+                    if (luauIsInlineVector(rb))
+                    {
+                        const char* name = getstr(tsvalue(kv));
+                        int ic = (name[0] | ' ') - 'x';
+                        if (ic == -1)
+                            ic = 3;
+                        if (unsigned(ic) < 4 && name[1] == '\0')
+                        {
+                            setnvalue(ra, reinterpret_cast<const float*>(rb)[ic]);
+                            VM_NEXT();
+                        }
+                    }
+#endif
                     // fast-path: registered direct field handler
                     if (ttisuserdata(rb))
                     {
@@ -573,7 +678,7 @@ reentry:
                             int slot = LUAU_INSN_C(insn) & dispatch->nodemask8;
                             LuaNode* n = &dispatch->node[slot];
 
-#if LUA_VECTOR_DOUBLE == 1
+#if LUA_VECTOR_HAS_GC_BOX
                             DirectFieldResult dfr{L, ra};
                             void* resultarg = &dfr;
 #else
@@ -583,7 +688,11 @@ reentry:
                             if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n))))
                             {
                                 lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(gval(n)));
+#if LUA_VECTOR_HAS_GC_BOX
+                                VM_PROTECT(fn(uvalue(rb)->data, resultarg));
+#else
                                 fn(uvalue(rb)->data, resultarg);
+#endif
                                 VM_NEXT();
                             }
 
@@ -593,7 +702,11 @@ reentry:
                                 // cache slot for future lookups
                                 VM_PATCH_C(pc - 2, gval2slot(dispatch, fptr));
                                 lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(fptr));
+#if LUA_VECTOR_HAS_GC_BOX
+                                VM_PROTECT(fn(uvalue(rb)->data, resultarg));
+#else
                                 fn(uvalue(rb)->data, resultarg);
+#endif
                                 VM_NEXT();
                             }
                         }
@@ -774,20 +887,31 @@ reentry:
                 VM_CASE_STKID rb = VM_REG(LUAU_INSN_B(insn));
                 VM_CASE_STKID rc = VM_REG(LUAU_INSN_C(insn));
 
-                // fast-path: array lookup
-                if (ttistable(rb) && ttisnumber(rc))
+                // fast-path: array lookup (and inline vector hash lookup under NaN-tag)
+                if (ttistable(rb))
                 {
                     LuaTable* h = hvalue(rb);
 
-                    double indexd = nvalue(rc);
-                    int index = int(indexd);
-
-                    // index has to be an exact integer and in-bounds for the array portion
-                    if (LUAU_LIKELY(unsigned(index) - 1 < unsigned(h->sizearray) && !h->metatable && double(index) == indexd))
+                    if (ttisnumber(rc))
                     {
-                        setobj2s(L, ra, &h->array[unsigned(index - 1)]);
+                        double indexd = nvalue(rc);
+                        int index = int(indexd);
+
+                        // index has to be an exact integer and in-bounds for the array portion
+                        if (LUAU_LIKELY(unsigned(index) - 1 < unsigned(h->sizearray) && !h->metatable && double(index) == indexd))
+                        {
+                            setobj2s(L, ra, &h->array[unsigned(index - 1)]);
+                            VM_NEXT();
+                        }
+                    }
+#if LUA_T16_NANTAG_VEC4
+                    else if (luauIsInlineVector(rc) && !h->metatable)
+                    {
+                        const TValue* res = luaH_getvectorinline(h, reinterpret_cast<const float*>(rc));
+                        setobj2s(L, ra, res);
                         VM_NEXT();
                     }
+#endif
 
                     // fall through to slow path
                 }
@@ -1768,7 +1892,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
+                    VM_VEC_ADD(ra, vb, vc);
                     VM_NEXT();
                 }
                 else
@@ -1814,7 +1938,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
+                    VM_VEC_SUB(ra, vb, vc);
                     VM_NEXT();
                 }
                 else
@@ -1860,21 +1984,21 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
-                    setvvalue(L, ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
+                    VM_VEC_MULS(ra, vb, vc);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
+                    VM_VEC_MUL(ra, vb, vc);
                     VM_NEXT();
                 }
                 else if (ttisnumber(rb) && ttisvector(rc))
                 {
                     LUA_VECTOR_TYPE vb = cast_to(LUA_VECTOR_TYPE, nvalue(rb));
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb * vc[0], vb * vc[1], vb * vc[2], vb * vc[3]);
+                    VM_VEC_MULS(ra, vc, vb);
                     VM_NEXT();
                 }
                 else
@@ -1921,21 +2045,21 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
-                    setvvalue(L, ra, vb[0] / vc, vb[1] / vc, vb[2] / vc, vb[3] / vc);
+                    VM_VEC_DIVS(ra, vb, vc);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
+                    VM_VEC_DIV(ra, vb, vc);
                     VM_NEXT();
                 }
                 else if (ttisnumber(rb) && ttisvector(rc))
                 {
                     LUA_VECTOR_TYPE vb = cast_to(LUA_VECTOR_TYPE, nvalue(rb));
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, vb / vc[0], vb / vc[1], vb / vc[2], vb / vc[3]);
+                    VM_VEC_SDIV(ra, vb, vc);
                     VM_NEXT();
                 }
                 else
@@ -1982,8 +2106,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
-                    setvvalue(
-                        L,
+                    VM_SETVECTOR(
                         ra,
                         LUA_VECTOR_TYPE(luai_numidiv(vb[0], vc)),
                         LUA_VECTOR_TYPE(luai_numidiv(vb[1], vc)),
@@ -2122,7 +2245,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
-                    setvvalue(L, ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
+                    VM_VEC_MULS(ra, vb, vc);
                     VM_NEXT();
                 }
                 else
@@ -2168,7 +2291,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE nc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
-                    setvvalue(L, ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
+                    VM_VEC_DIVS(ra, vb, nc);
                     VM_NEXT();
                 }
                 else
@@ -2214,8 +2337,7 @@ reentry:
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
                     LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
-                    setvvalue(
-                        L,
+                    VM_SETVECTOR(
                         ra,
                         LUA_VECTOR_TYPE(luai_numidiv(vb[0], vc)),
                         LUA_VECTOR_TYPE(luai_numidiv(vb[1], vc)),
@@ -2386,7 +2508,7 @@ reentry:
                 else if (ttisvector(rb))
                 {
                     const LUA_VECTOR_TYPE* vb = vvalue(rb);
-                    setvvalue(L, ra, -vb[0], -vb[1], -vb[2], -vb[3]);
+                    VM_VEC_NEG(ra, vb);
                     VM_NEXT();
                 }
                 else
@@ -3160,7 +3282,7 @@ reentry:
                 {
                     LUA_VECTOR_TYPE nb = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
                     const LUA_VECTOR_TYPE* vc = vvalue(rc);
-                    setvvalue(L, ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
+                    VM_VEC_SDIV(ra, nb, vc);
                     VM_NEXT();
                 }
                 else
@@ -3400,9 +3522,13 @@ reentry:
                 uint32_t aux = *pc;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
 
+#if LUA_T16_NANTAG_VEC4
+                pc += int(ttisnil(ra)) != LUAU_INSN_AUX_NOT(aux) ? LUAU_INSN_D(insn) : 1;
+#else
                 static_assert(LUA_TNIL == 0, "we expect type-1 to be negative iff type is nil");
                 // condition is equivalent to: int(ttisnil(ra)) != LUAU_INSN_AUX_NOT(aux)
                 pc += int((ttype(ra) - 1) ^ aux) < 0 ? LUAU_INSN_D(insn) : 1;
+#endif
                 VM_ASSERT_PC(pc);
                 VM_NEXT();
             }

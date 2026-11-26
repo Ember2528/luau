@@ -115,7 +115,7 @@ LUAU_FASTFLAGVARIABLE(LuauCageSplitData)
 #define ABISWITCH(x64, ms32, gcc32) (sizeof(void*) == 8 ? x64 : ms32)
 #endif
 
-#if LUA_VECTOR_SIZE == 4
+#if LUA_VECTOR_SIZE == 4 && !LUA_T16_NANTAG_VEC4
 static_assert(sizeof(TValue) == ABISWITCH(24, 24, 24), "size mismatch for value");
 static_assert(sizeof(LuaNode) == ABISWITCH(48, 48, 48), "size mismatch for table entry");
 #else

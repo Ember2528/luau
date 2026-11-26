@@ -141,10 +141,24 @@
 #define LUA_VECTOR_DOUBLE 0
 #endif
 
+#ifndef LUA_T16_NANTAG_VEC4
+#define LUA_T16_NANTAG_VEC4 0
+#endif
+
+#if LUA_T16_NANTAG_VEC4 && (LUA_VECTOR_SIZE != 4 || LUA_VECTOR_DOUBLE != 0)
+#error "LUA_T16_NANTAG_VEC4 requires LUA_VECTOR_SIZE == 4 and LUA_VECTOR_DOUBLE == 0"
+#endif
+
+#define LUA_VECTOR_HAS_GC_BOX (LUA_VECTOR_DOUBLE == 1 || LUA_T16_NANTAG_VEC4 == 1)
+
 #if LUA_VECTOR_DOUBLE == 1
 #define LUA_VECTOR_TYPE double
 #else
 #define LUA_VECTOR_TYPE float
 #endif
 
+#if LUA_T16_NANTAG_VEC4
+#define LUA_EXTRA_SIZE 1
+#else
 #define LUA_EXTRA_SIZE (LUA_VECTOR_SIZE - 2)
+#endif

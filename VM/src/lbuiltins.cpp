@@ -26,6 +26,20 @@
 #endif
 #endif
 
+#if LUA_T16_NANTAG_VEC4 && (defined(__SSE2__) || (defined(_MSC_VER) && (defined(_M_X64) || _M_IX86_FP >= 2)))
+#include <emmintrin.h>
+#define LUAU_NANTAG_SSE2 1
+#else
+#define LUAU_NANTAG_SSE2 0
+#endif
+
+#if LUA_T16_NANTAG_VEC4 && (defined(__aarch64__) || defined(_M_ARM64))
+#include <arm_neon.h>
+#define LUAU_NANTAG_NEON 1
+#else
+#define LUAU_NANTAG_NEON 0
+#endif
+
 // luauF functions implement FASTCALL instruction that performs a direct execution of some builtin functions from the VM
 // The rule of thumb is that FASTCALL functions can not call user code, yield, fail, or reallocate stack.
 // If types of the arguments mismatch, luauF_* needs to return -1 and the execution will fall back to the usual call path
@@ -1058,6 +1072,65 @@ static int luauF_vector(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
 {
     if (nparams >= 2 && nresults <= 1 && ttisnumber(arg0) && ttisnumber(args))
     {
+#if LUA_T16_NANTAG_VEC4
+        (void)L;
+        if (LUAU_LIKELY(nparams == 3))
+        {
+            if (!ttisnumber(args + 1))
+                return -1;
+#if LUAU_NANTAG_SSE2
+            __m128 xy = _mm_cvtpd_ps(_mm_set_pd(nvalue(args), nvalue(arg0)));
+            __m128 zw = _mm_cvtsd_ss(_mm_setzero_ps(), _mm_load_sd(&nvalue(args + 1)));
+            _mm_storeu_ps(reinterpret_cast<float*>(res), _mm_movelh_ps(xy, zw));
+#elif LUAU_NANTAG_NEON
+            float32x2_t xy = vcvt_f32_f64(vcombine_f64(vdup_n_f64(nvalue(arg0)), vdup_n_f64(nvalue(args))));
+            float32x4_t v = vcvt_high_f32_f64(xy, vcombine_f64(vdup_n_f64(nvalue(args + 1)), vdup_n_f64(0.0)));
+            vst1q_f32(reinterpret_cast<float*>(res), v);
+#else
+            float lanes[4] = {float(nvalue(arg0)), float(nvalue(args)), float(nvalue(args + 1)), 0.0f};
+            memcpy(res, lanes, sizeof(lanes));
+#endif
+            return 1;
+        }
+        if (nparams == 2)
+        {
+#if LUAU_NANTAG_SSE2
+            __m128 xy = _mm_cvtpd_ps(_mm_set_pd(nvalue(args), nvalue(arg0)));
+            _mm_storeu_ps(reinterpret_cast<float*>(res), xy);
+#elif LUAU_NANTAG_NEON
+            float32x2_t xy = vcvt_f32_f64(vcombine_f64(vdup_n_f64(nvalue(arg0)), vdup_n_f64(nvalue(args))));
+            vst1q_f32(reinterpret_cast<float*>(res), vcombine_f32(xy, vdup_n_f32(0.0f)));
+#else
+            float lanes[4] = {float(nvalue(arg0)), float(nvalue(args)), 0.0f, 0.0f};
+            memcpy(res, lanes, sizeof(lanes));
+#endif
+            return 1;
+        }
+        if (!ttisnumber(args + 1) || !ttisnumber(args + 2))
+            return -1;
+#if LUAU_NANTAG_SSE2
+        __m128 xy = _mm_cvtpd_ps(_mm_set_pd(nvalue(args), nvalue(arg0)));
+        __m128 zw = _mm_cvtpd_ps(_mm_set_pd(nvalue(args + 2), nvalue(args + 1)));
+        uint32_t wbits = uint32_t(_mm_cvtsi128_si32(_mm_shuffle_epi32(_mm_castps_si128(zw), 0x55)));
+        if (LUAU_UNLIKELY(wbits >= kNaNTagBase))
+            return -1;
+        _mm_storeu_ps(reinterpret_cast<float*>(res), _mm_movelh_ps(xy, zw));
+#elif LUAU_NANTAG_NEON
+        float32x2_t xy = vcvt_f32_f64(vcombine_f64(vdup_n_f64(nvalue(arg0)), vdup_n_f64(nvalue(args))));
+        float32x4_t v = vcvt_high_f32_f64(xy, vcombine_f64(vdup_n_f64(nvalue(args + 1)), vdup_n_f64(nvalue(args + 2))));
+        uint32_t wbits = vgetq_lane_u32(vreinterpretq_u32_f32(v), 3);
+        if (LUAU_UNLIKELY(wbits >= kNaNTagBase))
+            return -1;
+        vst1q_f32(reinterpret_cast<float*>(res), v);
+#else
+        float lanes[4] = {float(nvalue(arg0)), float(nvalue(args)), float(nvalue(args + 1)), float(nvalue(args + 2))};
+        uint32_t wbits;
+        memcpy(&wbits, &lanes[3], sizeof(wbits));
+        if (LUAU_UNLIKELY(wbits >= kNaNTagBase))
+            return -1;
+        memcpy(res, lanes, sizeof(lanes));
+#endif
+#else
         LUA_VECTOR_TYPE x = LUA_VECTOR_TYPE(nvalue(arg0));
         LUA_VECTOR_TYPE y = LUA_VECTOR_TYPE(nvalue(args));
         LUA_VECTOR_TYPE z = LUA_VECTOR_TYPE(0.0);
@@ -1080,6 +1153,7 @@ static int luauF_vector(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
         setvvalue(L, res, x, y, z, w);
 #else
         setvvalue(L, res, x, y, z, 0.0);
+#endif
 #endif
 
         return 1;

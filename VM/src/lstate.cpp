@@ -205,6 +205,20 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
     L->global = g;
     g->mainthread = L;
 
+#if LUA_T16_NANTAG_VEC4
+    // All-zero TValue bytes represent inline vector(0, 0, 0, 0), not nil.
+    // Explicitly initialize zero-allocated global TValue slots to nil.
+    setnilvalue(&g->pseudotemp);
+    setnilvalue(&g->registry);
+    setnilvalue(&g->weakregistry);
+    for (auto& direct : g->udatadirect)
+    {
+        setnilvalue(&direct.indextm);
+        setnilvalue(&direct.newindextm);
+        setnilvalue(&direct.namecalltm);
+    }
+#endif
+
     g->frealloc = allocator;
     g->ud = ud;
 

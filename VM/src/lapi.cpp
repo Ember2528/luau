@@ -654,6 +654,10 @@ const void* lua_topointer(lua_State* L, int idx)
         return uvalue(o)->data;
     case LUA_TLIGHTUSERDATA:
         return pvalue(o);
+#if LUA_T16_NANTAG_VEC4
+    case LUA_TVECTOR:
+        return NULL;
+#endif
     default:
         return iscollectable(o) ? gcvalue(o) : NULL;
     }
@@ -702,6 +706,10 @@ void lua_pushvector(lua_State* L, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECT
     ensure_stack(L, 1);
     setvvalue(L, L->top, x, y, z, w);
     api_incr_top(L);
+#if LUA_T16_NANTAG_VEC4
+    if (LUAU_UNLIKELY(iscollectable(L->top - 1)))
+        luaC_checkGC(L);
+#endif
 }
 #else
 void lua_pushvector(lua_State* L, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z)
@@ -2208,14 +2216,14 @@ void lua_registeruserdatadirectfieldget(lua_State* L, int tag, const char* field
 
 void lua_userdatadirectfield_setnumber(void* result, double n)
 {
-    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    TValue* slot = LUA_VECTOR_HAS_GC_BOX ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
     setnvalue(slot, n);
 }
 
 #if LUA_VECTOR_SIZE == 4
 void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z, LUA_VECTOR_TYPE w)
 {
-    if (LUA_VECTOR_DOUBLE == 1)
+    if (LUA_VECTOR_HAS_GC_BOX)
     {
         DirectFieldResult* dfr = static_cast<DirectFieldResult*>(result);
         setvvalue(dfr->L, dfr->slot, x, y, z, w);
@@ -2228,7 +2236,7 @@ void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECT
 #else
 void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z)
 {
-    if (LUA_VECTOR_DOUBLE == 1)
+    if (LUA_VECTOR_HAS_GC_BOX)
     {
         DirectFieldResult* dfr = static_cast<DirectFieldResult*>(result);
         setvvalue(dfr->L, dfr->slot, x, y, z, 0);
@@ -2242,12 +2250,12 @@ void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECT
 
 void lua_userdatadirectfield_setboolean(void* result, int b)
 {
-    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    TValue* slot = LUA_VECTOR_HAS_GC_BOX ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
     setbvalue(slot, b);
 }
 
 void lua_userdatadirectfield_setnil(void* result)
 {
-    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    TValue* slot = LUA_VECTOR_HAS_GC_BOX ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
     setnilvalue(slot);
 }

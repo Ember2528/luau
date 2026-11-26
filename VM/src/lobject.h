@@ -6,6 +6,10 @@
 #include "lcommon.h"
 #include "lbytecode.h"
 
+#if LUA_T16_NANTAG_VEC4
+#include <string.h>
+#endif
+
 /*
 ** Union of all collectible objects
 */
@@ -43,12 +47,102 @@ typedef union
 ** Tagged Values
 */
 
+#if LUA_T16_NANTAG_VEC4
+// Top-of-uint32 NaN-tag encoding for 16-byte four-wide float TValues:
+//   0x00000000 .. 0xffffffdf : raw IEEE-754 float32 'w' lane of an inline float4 vector (non-collectable)
+//   0xffffffe0 .. 0xffffffef : non-vector tags (kNaNTagBase | logicalTag), fitting in x64 imm8 & ARM64 CMN
+//   0xffffffff               : escaped GC-boxed float4 vector (when raw w bits >= 0xffffffe0u; collectable)
+// This gives single-instruction scalar tag checks, single-instruction iscollectable (bits >= 0xffffffe5u),
+// single-instruction inline-vector checks (bits < 0xffffffe0u), and branchless ttisvector ((bits + 1u) <= 0xffffffe0u).
+inline constexpr uint32_t kNaNTagBase = 0xffffffe0u;
+inline constexpr uint32_t kNaNTagEscapedVector = 0xffffffffu;
+inline constexpr uint32_t kNaNTagCollectableMin = kNaNTagBase | uint32_t(LUA_TSTRING);
+
+static_assert(LUA_T_ALL <= 31 && LUA_TVECTOR < LUA_TSTRING, "NaN-tag layout assumes <= 31 tags and LUA_TVECTOR < LUA_TSTRING");
+
+inline constexpr uint32_t luauEncodeNaNTag(int tag)
+{
+    return tag == LUA_TVECTOR ? kNaNTagEscapedVector : (kNaNTagBase | uint32_t(tag));
+}
+
+inline constexpr int luauDecodeNaNTag(uint32_t bits)
+{
+    return uint32_t(bits + 1u) <= kNaNTagBase ? int(LUA_TVECTOR) : int(bits & 0x1fu);
+}
+
+struct NaNTag
+{
+    uint32_t bits;
+
+    inline operator int() const
+    {
+        return luauDecodeNaNTag(bits);
+    }
+
+    inline NaNTag& operator=(int tag)
+    {
+        bits = luauEncodeNaNTag(tag);
+        return *this;
+    }
+
+    inline bool operator==(int tag) const
+    {
+        return tag == LUA_TVECTOR ? (uint32_t(bits + 1u) <= kNaNTagBase) : (bits == (kNaNTagBase | uint32_t(tag)));
+    }
+
+    inline bool operator!=(int tag) const
+    {
+        return !(*this == tag);
+    }
+
+    inline bool operator==(NaNTag other) const
+    {
+        if (bits == other.bits)
+            return true;
+        return uint32_t(bits + 1u) <= kNaNTagBase && uint32_t(other.bits + 1u) <= kNaNTagBase;
+    }
+
+    inline bool operator!=(NaNTag other) const
+    {
+        return !(*this == other);
+    }
+};
+
+inline bool operator==(int tag, NaNTag t)
+{
+    return t == tag;
+}
+
+inline bool operator!=(int tag, NaNTag t)
+{
+    return t != tag;
+}
+
+inline bool operator==(unsigned int tag, NaNTag t)
+{
+    return t == int(tag);
+}
+
+inline bool operator!=(unsigned int tag, NaNTag t)
+{
+    return t != int(tag);
+}
+#endif
+
 typedef struct lua_TValue
 {
     Value value;
     int extra[LUA_EXTRA_SIZE];
+#if LUA_T16_NANTAG_VEC4
+    NaNTag tt;
+#else
     int tt;
+#endif
 } TValue;
+
+#if LUA_T16_NANTAG_VEC4
+static_assert(sizeof(TValue) == 16, "NaN-tagged float4 TValue must remain 16 bytes");
+#endif
 
 #if LUA_VECTOR_SIZE == 4
 #define condvector4(vec4expr, vec3expr) vec4expr
@@ -83,7 +177,30 @@ typedef struct lua_TValue
 #define gcvalue(o) check_exp(iscollectable(o), (o)->value.gc)
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
+#if LUA_T16_NANTAG_VEC4
+struct TKey;
+inline bool luauIsInlineVector(const TValue* o)
+{
+    return o->tt.bits < kNaNTagBase;
+}
+inline bool luauIsCollectable(const TValue* o)
+{
+    return o->tt.bits >= kNaNTagCollectableMin;
+}
+inline bool luauIsCollectable(const TKey* k);
+template<typename T>
+inline bool luauIsCollectable(const T* o)
+{
+    return o->tt >= LUA_TSTRING || o->tt == LUA_TVECTOR;
+}
+inline float* luauVectorPtr(TValue* o);
+inline const float* luauVectorPtr(const TValue* o);
+inline float* luauVectorPtr(TKey* k);
+inline const float* luauVectorPtr(const TKey* k);
+#define vvalue(o) check_exp(ttisvector(o), luauVectorPtr(o))
+#else
 #define vvalue(o) check_exp(ttisvector(o), condvectordouble((o)->value.gc->vec.v, (o)->value.v))
+#endif
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
 #define uvalue(o) check_exp(ttisuserdata(o), &(o)->value.gc->u)
 #define clvalue(o) check_exp(ttisfunction(o), &(o)->value.gc->cl)
@@ -128,6 +245,23 @@ typedef struct lua_TValue
         i_o->tt = LUA_TVECTOR; \
         checkliveness((L)->global, i_o); \
     }
+#elif LUA_T16_NANTAG_VEC4
+LUAI_FUNC void luaV_setnanvec_slow(struct lua_State* L, TValue* dest, float x, float y, float z, float w);
+inline void luauSetNanVec(struct lua_State* L, TValue* dest, float x, float y, float z, float w)
+{
+    uint32_t wbits;
+    memcpy(&wbits, &w, sizeof(wbits));
+    if (LUAU_LIKELY(wbits < kNaNTagBase))
+    {
+        float lanes[4] = {x, y, z, w};
+        memcpy(dest, lanes, sizeof(lanes));
+    }
+    else
+    {
+        luaV_setnanvec_slow(L, dest, x, y, z, w);
+    }
+}
+#define setvvalue(L, obj, x, y, z, w) luauSetNanVec((L), (obj), float(x), float(y), float(z), float(w))
 #else
 #define setvvalue(L, obj, x, y, z, w) \
     { \
@@ -262,7 +396,11 @@ typedef struct lua_TValue
 
 #define setttype(obj, tt) (ttype(obj) = (tt))
 
+#if LUA_T16_NANTAG_VEC4
+#define iscollectable(o) luauIsCollectable(o)
+#else
 #define iscollectable(o) (ttype(o) >= LUA_TSTRING)
+#endif
 
 // wrapper for returning userdata properties directly
 struct DirectFieldResult
@@ -550,7 +688,94 @@ typedef struct LuaNode
     TKey key;
 } LuaNode;
 
+#if LUA_T16_NANTAG_VEC4
+struct LuauVectorKeySlot
+{
+    float v[4];
+};
+static_assert(sizeof(LuauVectorKeySlot) == 16, "LuauVectorKeySlot must be 16 bytes");
+static_assert(sizeof(TKey) == 16 && sizeof(LuaNode) == 32, "NaN-tagged float4 LuaNode must remain 32 bytes");
+
+// Table-only metadata bit stored in the upper unused bits of LuaTable::marked
+// (GC only uses bits 0..3: WHITE0BIT, WHITE1BIT, BLACKBIT, FIXEDBIT).
+constexpr uint8_t kVectorKeySidecarOwnedMask = 1u << 4;
+
+inline LuauVectorKeySlot* luauVectorKeySidecar(LuaNode* node, size_t count)
+{
+    return reinterpret_cast<LuauVectorKeySlot*>(node + count);
+}
+inline const LuauVectorKeySlot* luauVectorKeySidecar(const LuaNode* node, size_t count)
+{
+    return reinterpret_cast<const LuauVectorKeySlot*>(node + count);
+}
+
+inline bool luauIsCollectable(const TKey* k)
+{
+    return k->tt >= LUA_TSTRING;
+}
+inline float* luauVectorPtr(TValue* o)
+{
+    return LUAU_LIKELY(o->tt.bits < kNaNTagBase) ? reinterpret_cast<float*>(o) : reinterpret_cast<LuauVector*>(o->value.gc)->v;
+}
+inline const float* luauVectorPtr(const TValue* o)
+{
+    return LUAU_LIKELY(o->tt.bits < kNaNTagBase) ? reinterpret_cast<const float*>(o) : reinterpret_cast<const LuauVector*>(o->value.gc)->v;
+}
+inline float* luauVectorPtr(TKey* k)
+{
+    return static_cast<float*>(k->value.p);
+}
+inline const float* luauVectorPtr(const TKey* k)
+{
+    return static_cast<const float*>(k->value.p);
+}
+#endif
+
+inline constexpr size_t luauNodeStorageBytes(size_t count, bool sidecar = false)
+{
+#if LUA_T16_NANTAG_VEC4
+    return count * (sizeof(LuaNode) + (sidecar ? sizeof(LuauVectorKeySlot) : 0));
+#else
+    (void)sidecar;
+    return count * sizeof(LuaNode);
+#endif
+}
+
 // copy a value into a key
+#if LUA_T16_NANTAG_VEC4
+// Under LUA_T16_NANTAG_VEC4, vector keys can never contain NaN (so escaped LuauVectors are
+// always rejected by luaH_newkey) and live exclusively in the table's lazy inline sidecar
+// (value.p -> float[4], extra[0] = cached 32-bit hash, non-collectable), keeping
+// sizeof(TKey) == 16 and sizeof(LuaNode) == 32. Vector key insertions are handled directly
+// in ltable.cpp; non-vector keys copy value, extra, and decoded 4-bit tag.
+#define setnodekey(L, node, obj) \
+    { \
+        LuaNode* n_ = (node); \
+        const TValue* i_o = (obj); \
+        LUAU_ASSERT(!ttisvector(i_o)); \
+        n_->key.value = i_o->value; \
+        memcpy(n_->key.extra, i_o->extra, sizeof(n_->key.extra)); \
+        n_->key.tt = unsigned(int(i_o->tt)); \
+        checkliveness(L->global, i_o); \
+    }
+
+// copy a value from a key (never allocates: all vector keys are valid inline float4s in the sidecar)
+#define getnodekey(L, obj, node) \
+    { \
+        TValue* i_o = (obj); \
+        const LuaNode* n_ = (node); \
+        uint32_t i_tt = n_->key.tt; \
+        if (LUAU_UNLIKELY(i_tt == LUA_TVECTOR)) \
+            memcpy(i_o, n_->key.value.p, 4 * sizeof(float)); \
+        else \
+        { \
+            i_o->value = n_->key.value; \
+            i_o->extra[0] = n_->key.extra[0]; \
+            i_o->tt.bits = kNaNTagBase | i_tt; \
+        } \
+        checkliveness(L->global, i_o); \
+    }
+#else
 #define setnodekey(L, node, obj) \
     { \
         LuaNode* n_ = (node); \
@@ -571,6 +796,7 @@ typedef struct LuaNode
         i_o->tt = n_->key.tt; \
         checkliveness(L->global, i_o); \
     }
+#endif
 
 // clang-format off
 typedef struct LuaTable
@@ -596,6 +822,26 @@ typedef struct LuaTable
     GCObject* gclist;
 } LuaTable;
 // clang-format on
+
+inline bool luauHasVectorKeySidecar(const LuaTable* t)
+{
+#if LUA_T16_NANTAG_VEC4
+    return (t->marked & kVectorKeySidecarOwnedMask) != 0;
+#else
+    (void)t;
+    return false;
+#endif
+}
+
+inline void luauSetVectorKeySidecarOwned(LuaTable* t, bool owned)
+{
+#if LUA_T16_NANTAG_VEC4
+    t->marked = uint8_t((t->marked & ~kVectorKeySidecarOwnedMask) | (owned ? kVectorKeySidecarOwnedMask : 0));
+#else
+    (void)t;
+    (void)owned;
+#endif
+}
 
 typedef struct LuauClass
 {
