@@ -193,6 +193,16 @@ unsigned int getCpuFeaturesX64()
 
 bool isSupported()
 {
+#if LUA_VECTOR_SIZE == 4
+    if (LUA_EXTRA_SIZE != 2)
+        return false;
+
+    if (sizeof(TValue) != 24)
+        return false;
+
+    if (sizeof(LuaNode) != 48)
+        return false;
+#else
     if (LUA_EXTRA_SIZE != 1)
         return false;
 
@@ -201,6 +211,7 @@ bool isSupported()
 
     if (sizeof(LuaNode) != 32)
         return false;
+#endif
 
     // Windows CRT uses stack unwinding in longjmp so we have to use unwind data; on other platforms, it's only necessary for C++ EH.
 #if defined(_WIN32)

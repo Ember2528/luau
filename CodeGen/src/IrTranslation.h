@@ -1,6 +1,9 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/IrData.h"
+
+#include <array>
 #include <optional>
 
 #include <stdint.h>
@@ -18,6 +21,26 @@ enum class IrCondition : uint8_t;
 struct IrOp;
 struct IrBuilder;
 enum class IrCmd : uint8_t;
+
+// The 24-byte layout stores its tag outside the SIMD payload.
+struct LoadedTValue
+{
+    IrOp value;
+    IrOp tag;
+};
+
+using VectorComponents = std::array<IrOp, LUA_VECTOR_SIZE>;
+
+LoadedTValue loadTValueAndTag(IrBuilder& build, IrOp source, IrOp offset = {}, IrOp knownTag = {});
+void storeTValueAndTag(IrBuilder& build, IrOp destination, LoadedTValue source, IrOp offset = {});
+
+IrOp loadHeapVectorComponent(IrBuilder& build, IrOp pointer, int component);
+// Store a computed inline vector or components (allocating a heap vector in double builds), including its tag.
+void storeVector(IrBuilder& build, IrOp destination, IrOp value);
+void storeVector(IrBuilder& build, IrOp destination, const VectorComponents& components);
+VectorComponents loadHeapVector(IrBuilder& build, IrOp pointer);
+IrOp newHeapVector(IrBuilder& build, const VectorComponents& components);
+IrOp newHeapVector(IrBuilder& build, IrOp x, IrOp y, IrOp z, IrOp w = {});
 
 void translateInstLoadNil(IrBuilder& build, const Instruction* pc);
 void translateInstLoadB(IrBuilder& build, const Instruction* pc, int pcpos);
