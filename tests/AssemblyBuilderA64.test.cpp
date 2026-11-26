@@ -400,6 +400,8 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPBasic")
     SINGLE_COMPARE(fmov(d0, d1), 0x1E604020);
     SINGLE_COMPARE(fmov(d0, x1), 0x9E670020);
     SINGLE_COMPARE(fmov(x3, d2), 0x9E660043);
+    SINGLE_COMPARE(fmov(s0, w1), 0x1E270020);
+    SINGLE_COMPARE(fmov(w3, s2), 0x1E260043);
 }
 
 TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPMath")
@@ -505,6 +507,8 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPInsertExtract")
     SINGLE_COMPARE(dup_4s(q29, q30, 0), 0x4E0407DD);
     SINGLE_COMPARE(umov_4s(w1, q30, 3), 0x0E1C3FC1);
     SINGLE_COMPARE(umov_4s(w13, q1, 1), 0x0E0C3C2D);
+    SINGLE_COMPARE(zip1_4s(q1, q2, q3), 0x4E833841);
+    SINGLE_COMPARE(zip1_2d(q29, q30, q31), 0x4EDF3BDD);
 
     SINGLE_COMPARE(bit(q1, q2, q3), 0x6EA31C41);
     SINGLE_COMPARE(bif(q1, q2, q3), 0x6EE31C41);
@@ -644,6 +648,8 @@ TEST_CASE("LogTest")
     build.dup_4s(s29, q31, 2);
     build.dup_4s(q29, q30, 0);
     build.umov_4s(w1, q30, 3);
+    build.zip1_4s(q1, q2, q3);
+    build.zip1_2d(q29, q30, q31);
     build.fmul(q0, q1, q2);
 
     build.fcmeq_4s(q2, q0, q1);
@@ -691,6 +697,8 @@ TEST_CASE("LogTest")
  dup         s29,v31.s[2]
  dup         v29.4s,v30.s[0]
  umov        w1,v30.s[3]
+ zip1        v1.4s,v2.4s,v3.4s
+ zip1        v29.2d,v30.2d,v31.2d
  fmul        v0.4s,v1.4s,v2.4s
  fcmeq       v2.4s,v0.4s,v1.4s
  bit         v1.16b,v0.16b,v2.16b

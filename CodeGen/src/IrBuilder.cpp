@@ -995,6 +995,11 @@ IrOp IrBuilder::inst(IrCmd cmd, std::initializer_list<IrOp> ops)
 
     CODEGEN_ASSERT(!inTerminatedBlock);
 
+#if LUA_T16_NANTAG_VEC4
+    if (cmd == IrCmd::CHECK_INLINE_VEC)
+        function.hasCheckInlineVec = true;
+#endif
+
     if (isBlockTerminator(cmd))
     {
         function.blocks[activeBlockIdx].finish = index;
@@ -1016,6 +1021,11 @@ IrOp IrBuilder::inst(IrCmd cmd, const IrOps& ops)
     function.instructions.push_back({cmd, ops});
 
     CODEGEN_ASSERT(!inTerminatedBlock);
+
+#if LUA_T16_NANTAG_VEC4
+    if (cmd == IrCmd::CHECK_INLINE_VEC)
+        function.hasCheckInlineVec = true;
+#endif
 
     if (isBlockTerminator(cmd))
     {

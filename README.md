@@ -82,3 +82,13 @@ Other than the STL/CRT, Luau library components don't have external dependencies
 Luau implementation is distributed under the terms of [MIT License](https://github.com/luau-lang/luau/blob/master/LICENSE.txt). It is based on the Lua 5.x implementation, also under the MIT License.
 
 When Luau is integrated into external projects, we ask that you honor the license agreement and include Luau attribution into the user-facing product documentation. Attribution making use of the [Luau logo](https://github.com/luau-lang/site/blob/master/logo.svg) is also encouraged when reasonable.
+
+## Experimental 16-byte NaN-tagged four-wide vectors
+
+This branch adds an opt-in experimental `LUAU_T16_NANTAG_VEC4=ON` mode (used
+with `LUAU_VECTOR_FOUR_WIDE=ON`) that packs four-wide `float` vectors inline in
+16-byte `TValue`s and 32-byte `LuaNode`s with full x86-64 and AArch64 native
+CodeGen. Upstream's existing 24-byte four-wide `TValue` layout remains the
+default when `LUAU_VECTOR_FOUR_WIDE=ON` without `LUAU_T16_NANTAG_VEC4=ON`. See
+[docs/NaNTagFloat4.md](docs/NaNTagFloat4.md) for the representation, invariants,
+and build/test commands.

@@ -1633,6 +1633,9 @@ struct IrFunction
     // Taken from CompilationOptions for easy access
     bool recordCounters = false;
     bool recordFeedback = false;
+#if LUA_T16_NANTAG_VEC4
+    bool hasCheckInlineVec = false;
+#endif
 
     uint64_t jitRngState = 0; // PCG32 state for NOP padding; seeded per-function in lowerFunction
 

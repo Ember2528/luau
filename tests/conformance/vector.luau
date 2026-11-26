@@ -109,6 +109,13 @@ assert(vector.create(1, 2, 2).Magnitude == 3)
 assert(vector.create(0, 0, 0)['Dot'](vector.create(1, 2, 4), vector.create(5, 6, 7)) == 45)
 assert(vector.create(2, 0, 0).Unit == vector.create(1, 0, 0))
 
+if vector_size == 4 then
+	assert(vector.create(1, 2, 2, 4).Magnitude == 5)
+	assert(vector.create(0, 0, 0, 2).Unit == vector.create(0, 0, 0, 1))
+	-- The custom Dot callback uses XYZ, independently of the vector library.
+	assert(vector.create(1, 2, 4, 8):Dot(vector.create(5, 6, 7, 9)) == 45)
+end
+
 -- __namecall
 assert(vector.create(1, 2, 4):Dot(vector.create(5, 6, 7)) == 45)
 assert(ecall(function() vector.create(1, 2, 4):Dot() end) == "missing argument #2 (vector expected)")
@@ -188,6 +195,27 @@ local function numvectemporary()
 end
 
 numvectemporary()
+
+-- Computed fourth lanes survive tables, captures, and register overwrite.
+if vector_size == 4 then
+	local function copy(a: vector, b: vector)
+		assert(is_native_if_supported())
+		local v = a + b
+		local t = {v, saved = v}
+		return (function() return v end)(), t[1], t.saved
+	end
+	local a, b, c = copy(vector.create(1, 2, 3, 4), vector.create(4, 8, 16, 32))
+	assert(a == vector.create(5, 10, 19, 36) and b == a and c == a)
+	local function replace(x: number, w: number)
+		local v = vector.create(x, 2, 3, w)
+		local oldX, oldW = v.x, v.w
+		v = vector.create(w, 5, 6, x)
+		return oldX, oldW, v
+	end
+	local oldX, oldW, v = replace(unpack({16777217, -0.0}))
+	local expectedX = vector.create(16777217, 0, 0).x
+	assert(oldX == expectedX and v.w == expectedX and 1 / oldW == -math.huge and 1 / v.x == -math.huge)
+end
 
 assert(is_native_if_supported())
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string.h>
 
 #include "lobject.h"
 
@@ -1707,14 +1708,16 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
             {
                 if (const uint32_t* newIndex = instRedir.find(op.index))
                     op.index = *newIndex;
-                else if (std::find_if(
-                             inputs.begin(),
-                             inputs.end(),
-                             [op](auto& el)
-                             {
-                                 return el.first == op;
-                             }
-                         ) == inputs.end())
+                else if (
+                    std::find_if(
+                        inputs.begin(),
+                        inputs.end(),
+                        [op](auto& el)
+                        {
+                            return el.first == op;
+                        }
+                    ) == inputs.end()
+                )
                     CODEGEN_ASSERT(!"Values can only be used if they are defined in the same block or be an input");
             }
         };
@@ -1777,6 +1780,443 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
     }
 }
 
+#if LUA_T16_NANTAG_VEC4
+// Eliminate redundant CHECK_INLINE_VEC guards via two sound whole-function analyses:
+//  1) Dead-store elision: if a vector SSA value has zero live TValue-storing users
+//     (including ExitSync blocks), SIMD registers preserve arbitrary float4 bits.
+//  2) SafeW / SafeAllLanes / SafeScalar fixed-point: IEEE-754 float32 values that are
+//     finite, +/-inf, or NaNs with low-22-bit payload < 0x3fffe0 are closed under all
+//     hardware FP/SIMD ops on x86-64 and AArch64 and can never produce a reserved tag
+//     (0xffffffe0..0xffffffff).
+static void eliminateInlineVectorChecks(IrFunction& function)
+{
+    auto killInlineCheck = [&](IrInst& inst)
+    {
+        IrOp target = OP_C(inst);
+        kill(function, inst);
+        if (target.kind == IrOpKind::Block)
+        {
+            IrBlock& targetBlock = function.blockOp(target);
+            if (targetBlock.kind == IrBlockKind::ExitSync && targetBlock.useCount == 0)
+                kill(function, targetBlock);
+        }
+    };
+
+    const size_t numInsts = function.instructions.size();
+    std::vector<uint8_t> storedToTValue(numInsts, 0);
+    bool hasInlineCheck = false;
+    for (const IrBlock& block : function.blocks)
+    {
+        if (block.kind == IrBlockKind::Dead)
+            continue;
+        for (uint32_t i = block.start; i <= block.finish; ++i)
+        {
+            IrInst& inst = function.instructions[i];
+            if (inst.cmd == IrCmd::CHECK_INLINE_VEC)
+            {
+                hasInlineCheck = true;
+            }
+            else if (inst.cmd == IrCmd::STORE_TVALUE || inst.cmd == IrCmd::SET_UPVALUE)
+            {
+                if (OP_B(inst).kind == IrOpKind::Inst && OP_B(inst).index < numInsts)
+                    storedToTValue[OP_B(inst).index] = 1;
+            }
+            else if (inst.cmd == IrCmd::TAG_VECTOR)
+            {
+                if (OP_A(inst).kind == IrOpKind::Inst && OP_A(inst).index < numInsts)
+                    storedToTValue[OP_A(inst).index] = 1;
+            }
+            else if (inst.cmd == IrCmd::STORE_VECTOR)
+            {
+                if (HAS_OP_E(inst) && OP_E(inst).kind == IrOpKind::Inst && OP_E(inst).index < numInsts)
+                    storedToTValue[OP_E(inst).index] = 1;
+            }
+        }
+    }
+
+    if (!hasInlineCheck)
+        return;
+
+    bool hasRemainingInlineCheck = false;
+    for (const IrBlock& block : function.blocks)
+    {
+        if (block.kind == IrBlockKind::Dead)
+            continue;
+        for (uint32_t i = block.start; i <= block.finish; ++i)
+        {
+            IrInst& inst = function.instructions[i];
+            if (inst.cmd == IrCmd::CHECK_INLINE_VEC)
+            {
+                if (OP_A(inst).kind == IrOpKind::Inst && OP_A(inst).index < numInsts && !storedToTValue[OP_A(inst).index])
+                    killInlineCheck(inst);
+                else if (block.kind != IrBlockKind::Fallback)
+                    hasRemainingInlineCheck = true;
+            }
+        }
+    }
+
+    if (!hasRemainingInlineCheck)
+        return;
+
+    constexpr uint32_t kFloatExpMask = 0x7f800000u;
+    constexpr uint32_t kFloatMantMask = 0x007fffffu;
+    constexpr uint32_t kFloatPayloadMask = 0x003fffffu;
+    constexpr uint32_t kSafeFloatPayloadLimit = 0x003fffe0u;
+
+    constexpr uint8_t kSafeW = 1u << 0;
+    constexpr uint8_t kSafeAll = 1u << 1;
+    constexpr uint8_t kSafeScalar = 1u << 2;
+    constexpr uint8_t kSafeVecMask = kSafeW | kSafeAll;
+    constexpr uint8_t kSafeAllBits = kSafeW | kSafeAll | kSafeScalar;
+
+    auto isSafeFloatVal = [](float v) -> bool
+    {
+        uint32_t bits;
+        memcpy(&bits, &v, sizeof(bits));
+        return (bits & kFloatExpMask) != kFloatExpMask || (bits & kFloatMantMask) == 0u || (bits & kFloatPayloadMask) < kSafeFloatPayloadLimit;
+    };
+    auto isSafeDoubleVal = [](double v) -> bool
+    {
+        uint64_t bits;
+        memcpy(&bits, &v, sizeof(bits));
+        return (bits & 0x7ff0000000000000ull) != 0x7ff0000000000000ull || (bits & 0x000fffffffffffffull) == 0ull ||
+               ((bits >> 29) & kFloatPayloadMask) < kSafeFloatPayloadLimit;
+    };
+
+    std::array<uint8_t, 256> regSafe{};
+    if (function.proto)
+    {
+        for (const IrBlock& block : function.blocks)
+        {
+            if (block.kind == IrBlockKind::Dead)
+                continue;
+            for (uint32_t i = block.start; i <= block.finish; ++i)
+            {
+                IrInst& inst = function.instructions[i];
+                if ((inst.cmd == IrCmd::STORE_TVALUE || inst.cmd == IrCmd::STORE_VECTOR || inst.cmd == IrCmd::STORE_DOUBLE ||
+                     inst.cmd == IrCmd::STORE_SPLIT_TVALUE || inst.cmd == IrCmd::STORE_TAG) &&
+                    OP_A(inst).kind == IrOpKind::VmReg)
+                {
+                    size_t r = vmRegOp(OP_A(inst));
+                    if (r >= size_t(function.proto->numparams) && !function.cfg.captured.regs.test(r))
+                        regSafe[r] = kSafeAllBits;
+                }
+            }
+        }
+    }
+
+    std::array<uint8_t, 256> localSafe = regSafe;
+    std::vector<uint8_t> instSafe(numInsts, 0);
+
+    auto safeOp = [&](IrOp op) -> uint8_t
+    {
+        switch (op.kind)
+        {
+        case IrOpKind::Constant:
+            if (std::optional<double> v = function.asDoubleOp(op))
+                return isSafeDoubleVal(*v) ? kSafeScalar : 0;
+            return 0;
+        case IrOpKind::VmConst:
+            if (function.proto)
+            {
+                const TValue* tv = &function.proto->k[vmConstOp(op)];
+                if (ttisnumber(tv))
+                    return isSafeDoubleVal(nvalue(tv)) ? kSafeScalar : 0;
+                if (ttisvector(tv))
+                {
+                    const float* v = vvalue(tv);
+                    bool sw = isSafeFloatVal(v[3]);
+                    bool sa = sw && isSafeFloatVal(v[0]) && isSafeFloatVal(v[1]) && isSafeFloatVal(v[2]);
+                    return uint8_t((sw ? kSafeW : 0) | (sa ? kSafeAll : 0));
+                }
+            }
+            return 0;
+        case IrOpKind::VmReg:
+            return localSafe[vmRegOp(op)];
+        case IrOpKind::Inst:
+            return op.index < numInsts ? instSafe[op.index] : 0;
+        default:
+            return 0;
+        }
+    };
+
+    bool changed = true;
+    auto killRegMask = [&](int r, uint8_t keepMask)
+    {
+        if (unsigned(r) >= 256)
+            return;
+        localSafe[r] &= keepMask;
+        uint8_t next = regSafe[r] & keepMask;
+        if (next != regSafe[r])
+        {
+            regSafe[r] = next;
+            changed = true;
+        }
+    };
+    auto overwriteReg = [&](int r, uint8_t bits)
+    {
+        if (unsigned(r) >= 256)
+            return;
+        killRegMask(r, bits);
+        if (!function.cfg.captured.regs.test(r))
+            localSafe[r] = bits;
+    };
+    auto killFrom = [&](int firstReg)
+    {
+        for (int r = std::max(0, firstReg); r < 256; ++r)
+            killRegMask(r, 0);
+    };
+
+    struct SafeRegKillVisitor
+    {
+        decltype(killRegMask)& killReg;
+        decltype(killFrom)& killTail;
+
+        void def(IrOp op, int offset = 0)
+        {
+            killReg(vmRegOp(op) + offset, 0);
+        }
+        void maybeDef(IrOp op)
+        {
+            if (op.kind == IrOpKind::VmReg)
+                killReg(vmRegOp(op), 0);
+        }
+        void defRange(int start, int count)
+        {
+            if (count == -1)
+                killTail(start);
+            else
+                for (int j = 0; j < count; ++j)
+                    killReg(start + j, 0);
+        }
+        void use(IrOp, int = 0) {}
+        void maybeUse(IrOp) {}
+        void useRange(int, int) {}
+        void useVarargs(int) {}
+        void capture(int) {}
+    };
+    SafeRegKillVisitor killVisitor{killRegMask, killFrom};
+
+    std::vector<uint32_t> order = getSortedBlockOrder(function);
+    for (int iter = 0; iter < 8 && changed; ++iter)
+    {
+        changed = false;
+        std::fill(instSafe.begin(), instSafe.end(), 0);
+
+        for (uint32_t blockIdx : order)
+        {
+            const IrBlock& block = function.blocks[blockIdx];
+            if (block.kind == IrBlockKind::Dead)
+                continue;
+
+            localSafe = regSafe;
+
+            for (uint32_t i = block.start; i <= block.finish; ++i)
+            {
+                IrInst& inst = function.instructions[i];
+                switch (inst.cmd)
+                {
+                case IrCmd::INT_TO_NUM:
+                case IrCmd::UINT_TO_NUM:
+                case IrCmd::INT64_TO_NUM:
+                case IrCmd::UINT_TO_FLOAT:
+                    instSafe[i] = kSafeScalar;
+                    break;
+                case IrCmd::FLOAT_TO_NUM:
+                case IrCmd::NUM_TO_FLOAT:
+                case IrCmd::LOAD_DOUBLE:
+                    instSafe[i] = safeOp(OP_A(inst)) & kSafeScalar;
+                    break;
+                case IrCmd::LOAD_FLOAT:
+                    if (OP_A(inst).kind == IrOpKind::VmReg || OP_A(inst).kind == IrOpKind::VmConst)
+                    {
+                        uint8_t s = safeOp(OP_A(inst));
+                        if ((s & kSafeAll) || (function.intOp(OP_B(inst)) == 12 && (s & kSafeW)))
+                            instSafe[i] = kSafeScalar;
+                    }
+                    break;
+                case IrCmd::LOAD_TVALUE:
+                    if ((OP_A(inst).kind == IrOpKind::VmReg || OP_A(inst).kind == IrOpKind::VmConst) &&
+                        (!HAS_OP_B(inst) || function.asIntOp(OP_B(inst)) == 0))
+                        instSafe[i] = safeOp(OP_A(inst)) & kSafeVecMask;
+                    break;
+                case IrCmd::BUILD_VEC:
+                {
+                    bool sw = (safeOp(OP_D(inst)) & kSafeScalar) != 0;
+                    bool safeXYZ = (safeOp(OP_A(inst)) & safeOp(OP_B(inst)) & safeOp(OP_C(inst)) & kSafeScalar) != 0;
+                    instSafe[i] = sw ? uint8_t(kSafeW | (safeXYZ ? kSafeAll : 0)) : 0;
+                    break;
+                }
+                case IrCmd::BUFFER_READVECTOR:
+                    if (function.intOp(OP_D(inst)) < 4)
+                        instSafe[i] = kSafeW;
+                    break;
+                case IrCmd::FLOAT_TO_VEC:
+                    if (safeOp(OP_A(inst)) & kSafeScalar)
+                        instSafe[i] = kSafeVecMask;
+                    break;
+                case IrCmd::EXTRACT_VEC:
+                {
+                    uint8_t s = safeOp(OP_A(inst));
+                    if ((s & kSafeAll) || (function.intOp(OP_B(inst)) == 3 && (s & kSafeW)))
+                        instSafe[i] = kSafeScalar;
+                    break;
+                }
+                case IrCmd::DOT_VEC:
+                    if ((safeOp(OP_A(inst)) & safeOp(OP_B(inst)) & kSafeAll) != 0)
+                        instSafe[i] = kSafeScalar;
+                    break;
+                case IrCmd::ADD_VEC:
+                case IrCmd::SUB_VEC:
+                case IrCmd::MUL_VEC:
+                case IrCmd::DIV_VEC:
+                case IrCmd::IDIV_VEC:
+                case IrCmd::MIN_VEC:
+                case IrCmd::MAX_VEC:
+                case IrCmd::ADD_FLOAT:
+                case IrCmd::SUB_FLOAT:
+                case IrCmd::MUL_FLOAT:
+                case IrCmd::DIV_FLOAT:
+                case IrCmd::MIN_FLOAT:
+                case IrCmd::MAX_FLOAT:
+                case IrCmd::ADD_NUM:
+                case IrCmd::SUB_NUM:
+                case IrCmd::MUL_NUM:
+                case IrCmd::DIV_NUM:
+                case IrCmd::IDIV_NUM:
+                case IrCmd::MOD_NUM:
+                case IrCmd::MIN_NUM:
+                case IrCmd::MAX_NUM:
+                    instSafe[i] = safeOp(OP_A(inst)) & safeOp(OP_B(inst));
+                    break;
+                case IrCmd::MULADD_VEC:
+                case IrCmd::MULADD_NUM:
+                    instSafe[i] = safeOp(OP_A(inst)) & safeOp(OP_B(inst)) & safeOp(OP_C(inst));
+                    break;
+                case IrCmd::SELECT_VEC:
+                case IrCmd::SELECT_NUM:
+                    instSafe[i] = safeOp(OP_C(inst)) & safeOp(OP_D(inst));
+                    break;
+                case IrCmd::UNM_VEC:
+                case IrCmd::FLOOR_VEC:
+                case IrCmd::CEIL_VEC:
+                case IrCmd::ABS_VEC:
+                case IrCmd::UNM_FLOAT:
+                case IrCmd::FLOOR_FLOAT:
+                case IrCmd::CEIL_FLOAT:
+                case IrCmd::SQRT_FLOAT:
+                case IrCmd::ABS_FLOAT:
+                case IrCmd::SIGN_FLOAT:
+                case IrCmd::UNM_NUM:
+                case IrCmd::FLOOR_NUM:
+                case IrCmd::CEIL_NUM:
+                case IrCmd::ROUND_NUM:
+                case IrCmd::SQRT_NUM:
+                case IrCmd::ABS_NUM:
+                case IrCmd::SIGN_NUM:
+                    instSafe[i] = safeOp(OP_A(inst));
+                    break;
+                case IrCmd::INVOKE_LIBM:
+                {
+                    uint8_t ok = safeOp(OP_B(inst)) & kSafeScalar;
+                    if (ok && HAS_OP_C(inst))
+                    {
+                        bool isInt = OP_C(inst).kind == IrOpKind::Constant ? function.constOp(OP_C(inst)).kind == IrConstKind::Int
+                                                                           : getCmdValueKind(function.instOp(OP_C(inst)).cmd) == IrValueKind::Int;
+                        if (!isInt)
+                            ok &= safeOp(OP_C(inst));
+                    }
+                    instSafe[i] = ok;
+                    break;
+                }
+
+                // Safety-tracking VM register writers
+                case IrCmd::STORE_VECTOR:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                    {
+                        bool safeXYZ = (safeOp(OP_B(inst)) & safeOp(OP_C(inst)) & safeOp(OP_D(inst)) & kSafeScalar) != 0;
+                        if (HAS_OP_E(inst))
+                        {
+                            bool isTagOp = OP_E(inst).kind == IrOpKind::Constant && function.constOp(OP_E(inst)).kind == IrConstKind::Tag;
+                            bool sw = isTagOp ? (function.tagOp(OP_E(inst)) == LUA_TVECTOR) : ((safeOp(OP_E(inst)) & kSafeScalar) != 0);
+                            overwriteReg(vmRegOp(OP_A(inst)), sw ? uint8_t(kSafeW | (safeXYZ ? kSafeAll : 0)) : 0);
+                        }
+                        else
+                        {
+                            killRegMask(vmRegOp(OP_A(inst)), uint8_t(kSafeW | (safeXYZ ? kSafeAll : 0)));
+                        }
+                    }
+                    break;
+                case IrCmd::STORE_TVALUE:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                    {
+                        if (!HAS_OP_C(inst) || function.asIntOp(OP_C(inst)) == 0)
+                            overwriteReg(vmRegOp(OP_A(inst)), safeOp(OP_B(inst)) & kSafeVecMask);
+                        else
+                            killRegMask(vmRegOp(OP_A(inst)), 0);
+                    }
+                    break;
+                case IrCmd::STORE_DOUBLE:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                        killRegMask(vmRegOp(OP_A(inst)), safeOp(OP_B(inst)) & kSafeScalar);
+                    break;
+                case IrCmd::STORE_SPLIT_TVALUE:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                    {
+                        uint8_t bits = function.tagOp(OP_B(inst)) == LUA_TNUMBER ? (safeOp(OP_C(inst)) & kSafeScalar) : 0;
+                        overwriteReg(vmRegOp(OP_A(inst)), bits);
+                    }
+                    break;
+                case IrCmd::STORE_TAG:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                    {
+                        std::optional<uint8_t> t = function.asTagOp(OP_B(inst));
+                        uint8_t keep = (t && *t == LUA_TNUMBER) ? kSafeScalar : (t && *t == LUA_TVECTOR) ? kSafeW : 0;
+                        killRegMask(vmRegOp(OP_A(inst)), keep);
+                    }
+                    break;
+                case IrCmd::CALL:
+                case IrCmd::INVOKE_FASTPCALL:
+                    if (OP_A(inst).kind == IrOpKind::VmReg)
+                        killFrom(vmRegOp(OP_A(inst)));
+                    break;
+                case IrCmd::FASTCALL:
+                case IrCmd::INVOKE_FASTCALL:
+                case IrCmd::INVOKE_NAMECALL:
+                    if (OP_B(inst).kind == IrOpKind::VmReg)
+                        killFrom(vmRegOp(OP_B(inst)));
+                    break;
+                default:
+                    visitVmRegDefsUses(killVisitor, function, inst);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (changed)
+        return;
+
+    localSafe = regSafe;
+    for (const IrBlock& block : function.blocks)
+    {
+        if (block.kind == IrBlockKind::Dead)
+            continue;
+        for (uint32_t i = block.start; i <= block.finish; ++i)
+        {
+            IrInst& inst = function.instructions[i];
+            if (inst.cmd == IrCmd::CHECK_INLINE_VEC)
+            {
+                int lane = function.intOp(OP_B(inst));
+                uint8_t s = safeOp(OP_A(inst));
+                if ((lane == 3 && (s & kSafeW)) || (lane == 0 && (s & kSafeScalar)))
+                    killInlineCheck(inst);
+            }
+        }
+    }
+}
+#endif
+
 void markDeadStoresInBlockChains(IrBuilder& build)
 {
     IrFunction& function = build.function;
@@ -1799,6 +2239,10 @@ void markDeadStoresInBlockChains(IrBuilder& build)
 
     generateVmExitBlocks(build, recordedVmExitSyncs);
 
+#if LUA_T16_NANTAG_VEC4
+    if (function.hasCheckInlineVec)
+        eliminateInlineVectorChecks(function);
+#endif
 }
 
 } // namespace CodeGen

@@ -314,6 +314,7 @@ TEST_SUITE_BEGIN("IrLowering");
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReciprocal")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -376,6 +377,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorAdd")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -406,6 +408,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMinus")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -434,6 +437,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorSubMulDiv")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -470,6 +474,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorSubMulDiv2")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -502,6 +507,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMulDivMixed")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -546,6 +552,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLerp")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -584,6 +591,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorMinMax")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -617,6 +625,7 @@ bb_bytecode_1:
 }
 TEST_CASE_FIXTURE(LoweringFixture, "VectorFloorCeilAbs")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1204,6 +1213,7 @@ bb_7:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorConstantTag")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1260,6 +1270,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorRandomProp")
 {
+    ensureVectorSize3();
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
 local function foo(a: vector)
@@ -1301,6 +1312,7 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccess")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1414,6 +1426,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomAccessChain")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1529,6 +1542,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorCustomNamecallChain2")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
 
@@ -1640,6 +1654,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorLibraryChain")
 {
+    ensureVectorSize3();
     ScopedFastFlag luauCodegenMultiLaneDot{FFlag::LuauCodegenMultiLaneDot, true};
 
     ensureVectorFloat();
@@ -1726,6 +1741,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed1")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -1780,6 +1796,7 @@ bb_linear_11:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorNumberMixed2")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     assemblyOptions.includeOutlinedCode = true;
@@ -1833,6 +1850,7 @@ bb_fallback_5:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VectorReverseOps")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -3820,6 +3838,7 @@ bb_6:
 
 TEST_CASE_FIXTURE(LoweringFixture, "ImmediateTypeAnnotationHelp")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -4126,6 +4145,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "CustomUserdataPropertyAccess2")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     // This test requires runtime component to be present
@@ -4481,6 +4501,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LibraryFieldTypesAndConstants")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -4519,6 +4540,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LibraryFieldTypesAndConstants")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -8022,6 +8044,7 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "VecOpReuse2")
 {
+    ensureVectorSize3();
     ensureVectorFloat();
 
     CHECK_EQ(
@@ -8657,4 +8680,36 @@ bb_fallback_5:
 )"
     );
 }
+
+#if LUA_T16_NANTAG_VEC4
+TEST_CASE_FIXTURE(LoweringFixture, "NaNTagVec4BuildVecFusionAndLocalSafeW")
+{
+    // vector.create emits BUILD_VEC (no STORE_TAG), feeds vector ops directly in registers (DSE kills temp store), and SafeW elides CHECK_INLINE_VEC
+    std::string asm3 = getCodegenAssembly(
+        "local v = vector.create(1, 2, 3)\n"
+        "local function run(n: number) local x = v; for i = 1, n do x = vector.create(x.y, x.z, x.x) + v end return x.x + x.y + x.z end\n"
+    );
+    CHECK(countVectorOperations(asm3, "BUILD_VEC", ", 0") > 0);
+    CHECK(countVectorOperations(asm3, "STORE_TVALUE", "") == 3); // local x, loop limit, and x = ... (temp vector.create store eliminated)
+    CHECK(countVectorOperations(asm3, "STORE_TAG", "tvector") == 0);
+    CHECK(asm3.find("CHECK_INLINE_VEC") == std::string::npos);
+
+    std::string asm2 = getCodegenAssembly("local function make2(a: number, b: number) return vector.create(a, b) end\n");
+    CHECK(countVectorOperations(asm2, "BUILD_VEC", ", 0, 0") > 0);
+    CHECK(countVectorOperations(asm2, "STORE_TAG", "tvector") == 0);
+
+    std::string asm4 = getCodegenAssembly(
+        "local v = vector.create(1, 2, 3, 4)\n"
+        "local function run(n: number) local x = v; for i = 1, n do x = vector.create(x.y, x.z, x.w, x.x) + v end return x.x + x.w end\n"
+    );
+    CHECK(asm4.find("BUILD_VEC") != std::string::npos);
+    CHECK(countVectorOperations(asm4, "STORE_TVALUE", "") == 3); // local x, loop limit, and x = ... (temp vector.create store eliminated)
+    CHECK(asm4.find("CHECK_INLINE_VEC") == std::string::npos);
+
+    // Untrusted vector parameter retains CHECK_INLINE_VEC
+    std::string asmParam = getCodegenAssembly("local v = vector.create(1, 2, 3, 4)\nlocal function run(a: vector) return a + v end\n");
+    CHECK(asmParam.find("CHECK_INLINE_VEC") != std::string::npos);
+}
+#endif
+
 TEST_SUITE_END();

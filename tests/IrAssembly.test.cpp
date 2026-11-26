@@ -11,6 +11,7 @@
 
 using namespace Luau::CodeGen;
 
+#if !defined(LUA_VECTOR_SIZE) || LUA_VECTOR_SIZE == 3
 static void stripLinesContaining(std::string& text, const char* needle)
 {
     size_t pos = 0;
@@ -71,6 +72,7 @@ static void normalizeStateOffsets(std::string& text)
 
     text = std::move(result);
 }
+#endif
 
 class IrAssemblyFixture
 {
@@ -93,6 +95,7 @@ public:
         options.includeRegFlowInfo = IncludeRegFlowInfo::No;
     }
 
+#if !defined(LUA_VECTOR_SIZE) || LUA_VECTOR_SIZE == 3
     std::string lower()
     {
         std::string text = getAssemblyFromIr(build, options);
@@ -101,6 +104,7 @@ public:
 
         return text;
     }
+#endif
 
     HostIrHooks hooks;
     IrBuilder build;
@@ -120,6 +124,7 @@ public:
 
 TEST_SUITE_BEGIN("IrAssembly");
 
+#if !defined(LUA_VECTOR_SIZE) || LUA_VECTOR_SIZE == 3
 TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmReg")
 {
     IrOp entry = build.block(IrBlockKind::Internal);
@@ -906,5 +911,88 @@ bb_0:
 )"
     );
 }
+#endif
+
+#if LUA_T16_NANTAG_VEC4
+TEST_CASE_FIXTURE(IrAssemblyFixture, "NaNTagVec4LoweringX64AndA64")
+{
+    auto checkBothTargets =
+        [&](const std::function<void(IrBuilder&)>& emitIr, std::initializer_list<const char*> x64Subs, std::initializer_list<const char*> a64Subs)
+    {
+        for (AssemblyOptions::Target target : {AssemblyOptions::X64_SystemV, AssemblyOptions::A64})
+        {
+            IrBuilder b(hooks, {});
+            b.function.proto = nullptr;
+            emitIr(b);
+            updateUseCounts(b.function);
+
+            AssemblyOptions opts = options;
+            opts.target = target;
+            LoweringStats stats;
+            std::string assembly = getAssemblyFromIr(b, opts, &stats);
+            INFO(assembly);
+            CHECK_EQ(stats.loweringErrors, 0);
+            CHECK_EQ(stats.regAllocErrors, 0);
+            for (const char* sub : (target == AssemblyOptions::X64_SystemV ? x64Subs : a64Subs))
+                CHECK(assembly.find(sub) != std::string::npos);
+        }
+    };
+
+    // 1. Vector ops, lane-3 & lane-0 CHECK_INLINE_VEC, 4-lane DOT_VEC, parallel 4-lane & fused 3-lane STORE_VECTOR
+    checkBothTargets(
+        [&](IrBuilder& b)
+        {
+            b.beginBlock(b.block(IrBlockKind::Internal));
+            b.loadAndCheckTag(b.vmReg(0), tvector, b.vmExit(0));
+            b.loadAndCheckTag(b.vmReg(1), tvector, b.vmExit(0));
+            IrOp sum = b.inst(IrCmd::ADD_VEC, b.inst(IrCmd::LOAD_TVALUE, b.vmReg(0)), b.inst(IrCmd::LOAD_TVALUE, b.vmReg(1)));
+            b.inst(IrCmd::CHECK_INLINE_VEC, sum, b.constInt(3), b.vmExit(0));
+            b.inst(IrCmd::STORE_TVALUE, b.vmReg(2), sum);
+            IrOp d = b.inst(IrCmd::FLOAT_TO_NUM, b.inst(IrCmd::DOT_VEC, sum, b.inst(IrCmd::LOAD_TVALUE, b.vmReg(1)), b.constInt(4)));
+            b.inst(IrCmd::STORE_DOUBLE, b.vmReg(3), d);
+            b.inst(IrCmd::STORE_TAG, b.vmReg(3), b.constTag(tnumber));
+            IrOp f0 = b.inst(IrCmd::NUM_TO_FLOAT, b.inst(IrCmd::LOAD_DOUBLE, b.vmReg(4)));
+            IrOp f1 = b.inst(IrCmd::NUM_TO_FLOAT, b.inst(IrCmd::LOAD_DOUBLE, b.vmReg(5)));
+            IrOp f2 = b.inst(IrCmd::NUM_TO_FLOAT, b.inst(IrCmd::LOAD_DOUBLE, b.vmReg(6)));
+            b.inst(IrCmd::CHECK_INLINE_VEC, f0, b.constInt(0), b.vmExit(0));
+            IrOp built = b.inst(IrCmd::BUILD_VEC, f0, f1, f2, f0);
+            b.inst(IrCmd::STORE_TVALUE, b.vmReg(7), b.inst(IrCmd::ADD_VEC, built, sum));
+            b.inst(IrCmd::STORE_VECTOR, b.vmReg(8), f0, f1, f2, b.constTag(tvector));
+            b.inst(IrCmd::RETURN, b.vmReg(2), b.constInt(7));
+        },
+        {"FFFFFFE3h", "vpshufps", "vpextrd"},
+        {"cmn", "zip1", "fmov"}
+    );
+
+    // 2. Dynamic tag ops (LOAD_TAG, CMP_ANY, GET_TYPE, SELECT_IF_TRUTHY, JUMP_EQ_TAG, CMP_TAG)
+    checkBothTargets(
+        [&](IrBuilder& b)
+        {
+            IrOp entry = b.block(IrBlockKind::Internal), isVec = b.block(IrBlockKind::Internal), notVec = b.block(IrBlockKind::Internal);
+            b.beginBlock(entry);
+            IrOp t0 = b.inst(IrCmd::LOAD_TAG, b.vmReg(0));
+            b.inst(IrCmd::STORE_INT, b.vmReg(2), b.inst(IrCmd::CMP_ANY, b.vmReg(0), b.vmReg(1), b.cond(IrCondition::Equal)));
+            b.inst(IrCmd::STORE_TAG, b.vmReg(2), b.constTag(tboolean));
+            b.inst(IrCmd::STORE_POINTER, b.vmReg(3), b.inst(IrCmd::GET_TYPE, t0));
+            b.inst(IrCmd::STORE_TAG, b.vmReg(3), b.constTag(tstring));
+            IrOp tv0 = b.inst(IrCmd::LOAD_TVALUE, b.vmReg(0));
+            b.inst(IrCmd::STORE_TVALUE, b.vmReg(4), b.inst(IrCmd::SELECT_IF_TRUTHY, tv0, tv0, b.inst(IrCmd::LOAD_TVALUE, b.vmReg(1))));
+            b.inst(IrCmd::JUMP_EQ_TAG, t0, b.constTag(tvector), isVec, notVec);
+            b.beginBlock(isVec);
+            b.inst(IrCmd::RETURN, b.vmReg(2), b.constInt(3));
+            b.beginBlock(notVec);
+            b.inst(
+                IrCmd::STORE_INT,
+                b.vmReg(5),
+                b.inst(IrCmd::CMP_TAG, b.inst(IrCmd::LOAD_TAG, b.vmReg(1)), b.constTag(tvector), b.cond(IrCondition::Equal))
+            );
+            b.inst(IrCmd::STORE_TAG, b.vmReg(5), b.constTag(tboolean));
+            b.inst(IrCmd::RETURN, b.vmReg(2), b.constInt(4));
+        },
+        {"FFFFFFE0h"},
+        {"lsr"}
+    );
+}
+#endif
 
 TEST_SUITE_END();

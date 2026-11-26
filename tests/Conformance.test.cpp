@@ -6190,4 +6190,127 @@ TEST_CASE("JitInlinerLongJump")
     jitInliner = wasEnabled;
 }
 
+#if LUA_T16_NANTAG_VEC4
+TEST_CASE("NaNTagVec4")
+{
+    ScopedFastFlag bufferVec{FFlag::DebugLuauBufferVectorLibrary, true};
+    ScopedFastFlag bufferVecFast{FFlag::DebugLuauBufferVectorFastcalls, true};
+
+    const char* source = R"(
+local scratch = buffer.create(16)
+local function makeVecBits(x: number, y: number, z: number, wbits: number): vector
+    buffer.writef32(scratch, 0, x); buffer.writef32(scratch, 4, y); buffer.writef32(scratch, 8, z); buffer.writeu32(scratch, 12, wbits)
+    return buffer.readvectorf32x4(scratch, 0)
+end
+local function readWBits(v: vector): number
+    buffer.writevectorf32x4(scratch, 0, v)
+    return buffer.readu32(scratch, 12)
+end
+local function addSelfAlias(a: vector, b: vector): vector a = a + b; return a end
+local function guardAfterType(v: any): number return if type(v) == "vector" then v.x else -1 end
+local function checkTruthy(v: any): number return (v and 1 or 2) + ((not v) and 10 or 0) end
+local function eqAny(a: any, b: any): boolean return a == b end
+
+-- Signed zero w equality/hash (raw tt.bits 0x80000000 vs 0x00000000) and truthiness
+local vpos0, vneg0 = vector.create(1, 2, 3, 0), vector.create(1, 2, 3, -0.0)
+assert(vpos0 == vneg0 and eqAny(vpos0, vneg0) and checkTruthy(vector.create(0, 0, 0, 0)) == 1)
+
+-- All 32 colliding quiet-NaN w patterns (0xffffffe0 .. 0xffffffff)
+local escaped = {}
+for i = 0, 31 do
+    local bits = 0xffffffe0 + i
+    local ev = makeVecBits(i + 1, i + 2, i + 3, bits)
+    assert(type(ev) == "vector" and typeof(ev) == "vector")
+    assert(ev.x == i + 1 and ev.y == i + 2 and ev.z == i + 3 and ev.w ~= ev.w and readWBits(ev) == bits)
+    assert(guardAfterType(ev) == i + 1 and checkTruthy(ev) == 1 and not eqAny(ev, ev) and not eqAny(ev, vpos0))
+    local aliased = addSelfAlias(ev, vector.create(10, 20, 30, 0))
+    assert(type(aliased) == "vector" and aliased.x == i + 11 and aliased.y == i + 22 and aliased.z == i + 33 and aliased.w ~= aliased.w)
+    escaped[i + 1] = ev
+end
+
+-- Upvalue transitions: escaped -> escaped -> inline
+local upv: any = escaped[1]
+local function readUpv(): number return upv.x end
+assert(readUpv() == 1)
+upv = escaped[32]; assert(readUpv() == 32)
+upv = vector.create(42, 0, 0, 99); assert(readUpv() == 42)
+
+-- Sidecar-only vector keys: -0.0/escaped lookup+reject, rehash, mixed/presized upgrade, clone/clear
+local h = { [vpos0] = 123 }
+assert(h[vneg0] == 123 and h[escaped[1]] == nil and not pcall(function() h[escaped[1]] = 1 end))
+for i = 1, 500 do h[vector.create(i, i * 2, i * 3, i * 4)] = i end
+for i = 1, 500 do assert(h[vector.create(i, i * 2, i * 3, i * 4)] == i) end
+
+local mixed = { a = 1, b = 2, [1] = 10, [2] = 20 }
+for i = 1, 64 do mixed[vector.create(i, -i, i * 0.5, i * 0.25)] = i + 100 end
+assert(mixed.a == 1 and mixed.b == 2 and mixed[1] == 10 and mixed[2] == 20)
+local mixedClone = table.clone(mixed)
+table.clear(mixed)
+assert(mixed.a == nil and mixed[vector.create(1, -1, 0.5, 0.25)] == nil)
+for i = 1, 64 do assert(mixedClone[vector.create(i, -i, i * 0.5, i * 0.25)] == i + 100) end
+local presized = table.create(0)
+presized["seed"] = 9; presized[vector.create(9, 8, 7, 6)] = 42
+assert(presized["seed"] == 9 and presized[vector.create(9, 8, 7, 6)] == 42)
+
+-- Weak-key / weak-value vector semantics & old-table write barriers across GC
+local wk, wv = setmetatable({}, { __mode = "k" }), setmetatable({}, { __mode = "v" })
+wk[vector.create(7, 8, 9, 10)] = 777
+wv["e1"], wv["i1"] = escaped[17], vector.create(3, 4, 5, 6)
+for _ = 1, 20 do
+    local tmp = {}
+    for j = 1, 32 do tmp[j] = escaped[j] end
+    escaped[1] = tmp[1]
+end
+collectgarbage()
+assert(wk[vector.create(7, 8, 9, 10)] == 777 and readWBits(wv["e1"]) == 0xffffffe0 + 16)
+assert(wv["i1"] == vector.create(3, 4, 5, 6) and readWBits(escaped[32]) == 0xffffffff)
+
+-- SafeW / SafeAllLanes closed 4-wide loop
+local function vecLoop(n: number): vector
+    local x, v = vector.create(0, 0, 0, 0), vector.create(1, 2, 3, 4)
+    for _ = 1, n do x = vector.create(x.y, x.z, x.w, x.x) + v end
+    return x
+end
+assert(vecLoop(40) == vector.create(100, 100, 100, 100))
+return 1
+)";
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    lua_pushcfunction(
+        L,
+        [](lua_State* L) -> int
+        {
+            lua_gc(L, LUA_GCCOLLECT, 0);
+            luaC_validate(L);
+            return 0;
+        },
+        "collectgarbage"
+    );
+    lua_setglobal(L, "collectgarbage");
+    luaL_sandbox(L);
+    luaL_sandboxthread(L);
+
+    lua_CompileOptions copts = defaultOptions();
+    copts.optimizationLevel = 2;
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &copts, &bytecodeSize);
+    int result = luau_load(L, "=NaNTagVec4", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(result == 0);
+
+    if (codegen)
+    {
+        Luau::CodeGen::create(L);
+        Luau::CodeGen::compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions);
+    }
+
+    int status = lua_resume(L, nullptr, 0);
+    const char* err = status != 0 && lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
+    REQUIRE_MESSAGE(status == 0, err);
+    CHECK(lua_tonumber(L, -1) == 1);
+}
+#endif
+
 TEST_SUITE_END();

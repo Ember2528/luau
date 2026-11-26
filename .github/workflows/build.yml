@@ -132,6 +132,22 @@ jobs:
         build/Luau.Conformance --codegen --fflags=true
         build/Luau.Conformance --codegen -O2 --fflags=true
 
+  nantag-vec4:
+    name: four-wide 16-byte NaN-tagged runtime
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: configure
+      run: cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DLUAU_WERROR=ON -DLUAU_VECTOR_FOUR_WIDE=ON -DLUAU_T16_NANTAG_VEC4=ON
+    - name: build runtime and tests
+      run: cmake --build build --target Luau.Repl.CLI Luau.Conformance Luau.UnitTest -j2
+    - name: conformance and unit tests
+      run: |
+        build/Luau.Conformance
+        build/Luau.Conformance --codegen
+        build/Luau.Conformance --codegen -O2
+        build/Luau.UnitTest --test-suite=Compiler,BytecodeCompiler,BytecodeInliner,CodeAllocation,IrRegAllocX64,IrCallWrapperX64,IrAssembly,x64Assembly,A64Assembly,Optimization,ConstantPropagation,DSE
+
   coverage:
     runs-on: ubuntu-22.04
     steps:

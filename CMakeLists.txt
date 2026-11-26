@@ -17,9 +17,18 @@ option(LUAU_BUILD_SHARED "Build as a shared library" OFF)
 # Compile time options for Luau features
 option(LUAU_VECTOR_DOUBLE "Use 64-bit doubles for vector components" OFF)
 option(LUAU_VECTOR_FOUR_WIDE "Enable 4-wide mode for vectors, adding a 'w' component" OFF)
+option(LUAU_T16_NANTAG_VEC4 "Experimental: pack four-wide float vectors inline in 16-byte NaN-tagged TValues (requires LUAU_VECTOR_FOUR_WIDE=ON)" OFF)
 
 if(LUAU_BUILD_SHARED AND NOT LUAU_EXTERN_C)
     message(FATAL_ERROR "LUAU_BUILD_SHARED requires LUAU_EXTERN_C to be ON")
+endif()
+
+if(LUAU_T16_NANTAG_VEC4 AND NOT LUAU_VECTOR_FOUR_WIDE)
+    message(FATAL_ERROR "LUAU_T16_NANTAG_VEC4 requires LUAU_VECTOR_FOUR_WIDE to be ON")
+endif()
+
+if(LUAU_T16_NANTAG_VEC4 AND LUAU_VECTOR_DOUBLE)
+    message(FATAL_ERROR "LUAU_T16_NANTAG_VEC4 cannot be combined with LUAU_VECTOR_DOUBLE")
 endif()
 
 cmake_policy(SET CMP0054 NEW)
@@ -143,6 +152,7 @@ target_link_libraries(Luau.Require PUBLIC Luau.Config Luau.VM)
 target_include_directories(isocline PUBLIC extern/isocline/include)
 
 target_include_directories(Luau.VM.Internals INTERFACE VM/src)
+target_link_libraries(Luau.VM.Internals INTERFACE Luau.VM)
 
 set(LUAU_OPTIONS)
 
@@ -220,11 +230,15 @@ if(LUAU_EXTERN_C)
 endif()
 
 if(LUAU_VECTOR_DOUBLE)
-    target_compile_definitions(Luau.VM PUBLIC "LUA_VECTOR_DOUBLE=1")
+    target_compile_definitions(Luau.Common PUBLIC "LUA_VECTOR_DOUBLE=1")
 endif()
 
 if(LUAU_VECTOR_FOUR_WIDE)
-    target_compile_definitions(Luau.VM PUBLIC "LUA_VECTOR_SIZE=4")
+    target_compile_definitions(Luau.Common PUBLIC "LUA_VECTOR_SIZE=4")
+endif()
+
+if(LUAU_T16_NANTAG_VEC4)
+    target_compile_definitions(Luau.Common PUBLIC "LUA_T16_NANTAG_VEC4=1")
 endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND MSVC_VERSION GREATER_EQUAL 1924)

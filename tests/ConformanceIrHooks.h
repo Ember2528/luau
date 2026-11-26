@@ -110,6 +110,10 @@ inline bool vectorAccess(Luau::CodeGen::IrBuilder& build, const char* member, si
             IrOp z2 = build.inst(IrCmd::MUL_FLOAT, z, z);
 
             IrOp sum = build.inst(IrCmd::ADD_FLOAT, build.inst(IrCmd::ADD_FLOAT, x2, y2), z2);
+#if LUA_T16_NANTAG_VEC4
+            IrOp w = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(sourceReg), build.constInt(12));
+            sum = build.inst(IrCmd::ADD_FLOAT, sum, build.inst(IrCmd::MUL_FLOAT, w, w));
+#endif
 
             IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
 
@@ -158,6 +162,10 @@ inline bool vectorAccess(Luau::CodeGen::IrBuilder& build, const char* member, si
             IrOp z2 = build.inst(IrCmd::MUL_FLOAT, z, z);
 
             IrOp sum = build.inst(IrCmd::ADD_FLOAT, build.inst(IrCmd::ADD_FLOAT, x2, y2), z2);
+#if LUA_T16_NANTAG_VEC4
+            IrOp w = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(sourceReg), build.constInt(12));
+            sum = build.inst(IrCmd::ADD_FLOAT, sum, build.inst(IrCmd::MUL_FLOAT, w, w));
+#endif
 
             IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
             IrOp inv = build.inst(IrCmd::DIV_FLOAT, build.constDouble(1.0f), mag);
@@ -166,7 +174,13 @@ inline bool vectorAccess(Luau::CodeGen::IrBuilder& build, const char* member, si
             IrOp yr = build.inst(IrCmd::MUL_FLOAT, y, inv);
             IrOp zr = build.inst(IrCmd::MUL_FLOAT, z, inv);
 
+#if LUA_T16_NANTAG_VEC4
+            IrOp wr = build.inst(IrCmd::MUL_FLOAT, w, inv);
+            build.inst(IrCmd::CHECK_INLINE_VEC, wr, build.constInt(0), build.vmExit(pcpos));
+            build.inst(IrCmd::STORE_VECTOR, build.vmReg(resultReg), xr, yr, zr, wr);
+#else
             storeVecResult3(build, resultReg, xr, yr, zr);
+#endif
         }
 
         return true;
