@@ -627,6 +627,18 @@ void translateInstJumpxEqSShortcut(IrBuilder& build, const Instruction* pc, int 
         build.beginBlock(next);
 }
 
+void emitStoreVectorTValue(IrBuilder& build, int ra, IrOp vec, int pcpos)
+{
+#if LUA_T16_NANTAG_VEC4
+    build.inst(IrCmd::CHECK_INLINE_VEC, vec, build.constInt(3), build.vmExit(pcpos));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), vec);
+#else
+    (void)pcpos;
+    vec = build.inst(IrCmd::TAG_VECTOR, vec);
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), vec);
+#endif
+}
+
 static void translateBinaryNumericFallbackIfRequired(IrBuilder& build, IrOp fallback, int ra, IrOp opb, IrOp opc, TMS tm, int pcpos)
 {
     if (fallback.kind != IrOpKind::None)
@@ -744,9 +756,7 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
-
-            build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
+            emitStoreVectorTValue(build, ra, result, pcpos);
         }
 
         if (FFlag::LuauCodegenRuntimeFeedback)
@@ -826,9 +836,7 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
-
-            build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
+            emitStoreVectorTValue(build, ra, result, pcpos);
         }
 
         translateBinaryNumericFallbackIfRequired(build, fallback, ra, opb, opc, tm, pcpos);
@@ -906,9 +914,7 @@ static void translateInstBinaryNumeric(IrBuilder& build, int ra, int rb, int rc,
                 CODEGEN_ASSERT(!"Unknown TM op");
             }
 
-            result = build.inst(IrCmd::TAG_VECTOR, result);
-
-            build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
+            emitStoreVectorTValue(build, ra, result, pcpos);
         }
 
         translateBinaryNumericFallbackIfRequired(build, fallback, ra, opb, opc, tm, pcpos);
@@ -1156,8 +1162,7 @@ void translateInstMinus(IrBuilder& build, const Instruction* pc, int pcpos)
         {
             IrOp vb = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb));
             IrOp va = build.inst(IrCmd::UNM_VEC, vb);
-            va = build.inst(IrCmd::TAG_VECTOR, va);
-            build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), va);
+            emitStoreVectorTValue(build, ra, va, pcpos);
         }
 
         if (FFlag::LuauCodegenRuntimeFeedback)
@@ -2057,6 +2062,24 @@ void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos)
             build.inst(IrCmd::STORE_DOUBLE, build.vmReg(ra), value);
             build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNUMBER));
         }
+#if LUA_VECTOR_SIZE == 4
+        else if (str->len == 1 && (*field == 'W' || *field == 'w'))
+        {
+            if constexpr (LUA_VECTOR_DOUBLE == 1)
+            {
+                IrOp ptr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+                value = build.inst(IrCmd::BUFFER_READF64, ptr, build.constInt(24), build.constTag(LUA_TVECTOR));
+            }
+            else
+            {
+                value = build.inst(IrCmd::LOAD_FLOAT, build.vmReg(rb), build.constInt(12));
+                value = build.inst(IrCmd::FLOAT_TO_NUM, value);
+            }
+
+            build.inst(IrCmd::STORE_DOUBLE, build.vmReg(ra), value);
+            build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNUMBER));
+        }
+#endif
         else
         {
             if (FFlag::LuauCodegenRuntimeFeedback)

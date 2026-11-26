@@ -677,7 +677,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 int slot = LUAU_INSN_C(insn) & dispatch->nodemask8;
                 LuaNode* n = &dispatch->node[slot];
 
-#if LUA_VECTOR_DOUBLE == 1
+#if LUA_VECTOR_HAS_GC_BOX
                 DirectFieldResult dfr{L, ra};
                 void* resultarg = &dfr;
 #else
@@ -687,7 +687,11 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n))))
                 {
                     lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(gval(n)));
+#if LUA_VECTOR_HAS_GC_BOX
+                    VM_PROTECT(fn(uvalue(rb)->data, resultarg));
+#else
                     fn(uvalue(rb)->data, resultarg);
+#endif
                     return pc;
                 }
 
@@ -697,7 +701,11 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                     // cache slot for future lookups
                     VM_PATCH_C(pc - 2, gval2slot(dispatch, fptr));
                     lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(fptr));
+#if LUA_VECTOR_HAS_GC_BOX
+                    VM_PROTECT(fn(uvalue(rb)->data, resultarg));
+#else
                     fn(uvalue(rb)->data, resultarg);
+#endif
                     return pc;
                 }
             }

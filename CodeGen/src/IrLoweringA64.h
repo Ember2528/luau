@@ -47,6 +47,9 @@ struct IrLoweringA64
     void incrementCounterAt(size_t offset);
 
     void checkObjectBarrierConditions(RegisterA64 object, RegisterA64 temp, RegisterA64 ra, IrOp raOp, int ratag, Label& skip);
+#if LUA_T16_NANTAG_VEC4
+    void packFloat4(RegisterA64 dst, IrOp x, IrOp y, IrOp z, IrOp w);
+#endif
 
     // Operand data build helpers
     // May emit data/address synthesis instructions

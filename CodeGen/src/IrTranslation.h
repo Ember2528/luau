@@ -88,5 +88,7 @@ IrOp translateFinConstruct(IrBuilder& build, const Instruction* pc, int pcpos);
 void beforeInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void afterInstForNLoop(IrBuilder& build, const Instruction* pc);
 
+void emitStoreVectorTValue(IrBuilder& build, int ra, IrOp vec, int pcpos);
+
 } // namespace CodeGen
 } // namespace Luau

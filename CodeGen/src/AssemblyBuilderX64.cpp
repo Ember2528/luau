@@ -1071,6 +1071,11 @@ void AssemblyBuilderX64::vpshufps(RegisterX64 dst, RegisterX64 src1, OperandX64 
     placeAvx("vpshufps", dst, src1, src2, shuffle, 0xc6, false, AVX_0F, AVX_NP);
 }
 
+void AssemblyBuilderX64::vinsertps(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, uint8_t control)
+{
+    placeAvx("vinsertps", dst, src1, src2, control, 0x21, false, AVX_0F3A, AVX_66);
+}
+
 void AssemblyBuilderX64::vpinsrd(RegisterX64 dst, RegisterX64 src1, OperandX64 src2, uint8_t offset)
 {
     placeAvx("vpinsrd", dst, src1, src2, offset, 0x22, false, AVX_0F3A, AVX_66);

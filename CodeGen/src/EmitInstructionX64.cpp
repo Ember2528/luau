@@ -69,7 +69,7 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
         build.cmp(argi, argend);
         build.jcc(ConditionX64::NotBelow, exitfillnil);
 
-        build.mov(dword[argi + offsetof(TValue, tt)], LUA_TNIL);
+        build.mov(dword[argi + offsetof(TValue, tt)], encodeTagImm(LUA_TNIL));
         build.add(argi, sizeof(TValue));
         build.jmp(fillnil); // This loop rarely runs so it's not worth repeating cmp/jcc
 
@@ -160,7 +160,7 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
             // If there was no result, override the value with 'nil'
             build.test(results, results);
             build.jcc(ConditionX64::NotZero, skipnil);
-            build.mov(luauRegTag(ra), LUA_TNIL);
+            build.mov(luauRegTag(ra), encodeTagImm(LUA_TNIL));
             build.setLabel(skipnil);
         }
 
@@ -381,7 +381,7 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
 
     // Clear extra variables since we might have more than two
     for (int i = 2; i < aux; ++i)
-        build.mov(luauRegTag(ra + 3 + i), LUA_TNIL);
+        build.mov(luauRegTag(ra + 3 + i), encodeTagImm(LUA_TNIL));
 
     Label skipArray, skipArrayNil;
 
@@ -394,7 +394,7 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     // If element is nil, we increment the index; if it's not, we still need 'index + 1' inside
     build.inc(index);
 
-    build.cmp(dword[elemPtr + offsetof(TValue, tt)], LUA_TNIL);
+    build.cmp(dword[elemPtr + offsetof(TValue, tt)], encodeTagImm(LUA_TNIL));
     build.jcc(ConditionX64::Equal, skipArrayNil);
 
     // setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
@@ -405,7 +405,7 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     // setnvalue(ra + 3, double(index + 1));
     build.vcvtsi2sd(xmm0, xmm0, dwordReg(index));
     build.vmovsd(luauRegValue(ra + 3), xmm0);
-    build.mov(luauRegTag(ra + 3), LUA_TNUMBER);
+    build.mov(luauRegTag(ra + 3), encodeTagImm(LUA_TNUMBER));
 
     // setobj2s(L, ra + 4, e);
     setLuauReg(build, xmm2, ra + 4, xmmword[elemPtr]);

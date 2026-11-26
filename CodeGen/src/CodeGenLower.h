@@ -144,7 +144,7 @@ inline bool lowerImpl(
             seenFallback = true;
         }
 
-        if (options.includeIr)
+        if (logger && options.includeIr)
         {
             if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                 logger->formatAppend("# ");
@@ -174,7 +174,7 @@ inline bool lowerImpl(
         // Block might establish a safe environment right at the start
         if ((block.flags & kBlockFlagSafeEnvCheck) != 0)
         {
-            if (options.includeIr)
+            if (logger && options.includeIr)
             {
                 if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                     logger->formatAppend("# ");
@@ -193,7 +193,7 @@ inline bool lowerImpl(
             uint32_t bcLocation = bcLocations[index];
 
             // If IR instruction is the first one for the original bytecode, we can annotate it with source code text
-            if (outputEnabled && options.annotator && bcLocation != ~0u)
+            if (logger && outputEnabled && options.annotator && bcLocation != ~0u)
             {
                 options.annotator(options.annotatorContext, ctx.result, bytecodeid, bcLocation);
 
@@ -236,7 +236,7 @@ inline bool lowerImpl(
             // Either instruction result value is not referenced or the use count is not zero
             CODEGEN_ASSERT(inst.lastUse == 0 || inst.useCount != 0);
 
-            if (options.includeIr)
+            if (logger && options.includeIr)
             {
                 if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                     logger->formatAppend("# ");
@@ -289,7 +289,7 @@ inline bool lowerImpl(
             }
         }
 
-        if (options.includeIr && options.includeIrPrefix == IncludeIrPrefix::Yes)
+        if (logger && options.includeIr && options.includeIrPrefix == IncludeIrPrefix::Yes)
             logger->formatAppend("#\n");
 
         if (block.expectedNextBlock == ~0u)
@@ -304,7 +304,7 @@ inline bool lowerImpl(
 
     lowering.finishFunction();
 
-    if (outputEnabled && !options.includeOutlinedCode && textSize < ctx.result.size())
+    if (logger && outputEnabled && !options.includeOutlinedCode && textSize < ctx.result.size())
     {
         ctx.result.resize(textSize);
 

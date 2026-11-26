@@ -311,6 +311,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::NUM_TO_FLOAT:
         return IrValueKind::Float;
     case IrCmd::FLOAT_TO_VEC:
+    case IrCmd::BUILD_VEC:
     case IrCmd::TAG_VECTOR:
     case IrCmd::UNTAG_VECTOR:
         return IrValueKind::Tvalue;
@@ -337,6 +338,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::GET_UPVALUE:
         return IrValueKind::Tvalue;
     case IrCmd::SET_UPVALUE:
+    case IrCmd::CHECK_INLINE_VEC:
     case IrCmd::CHECK_TAG:
     case IrCmd::CHECK_TRUTHY:
     case IrCmd::CHECK_READONLY:
@@ -506,6 +508,17 @@ bool isGCO(uint8_t tag)
 
     // mirrors iscollectable(o) from VM/lobject.h
     return tag >= LUA_TSTRING;
+}
+
+bool isMaybeGCO(uint8_t tag)
+{
+    CODEGEN_ASSERT(tag < LUA_T_COUNT);
+
+#if LUA_T16_NANTAG_VEC4
+    return tag >= LUA_TSTRING || tag == LUA_TVECTOR;
+#else
+    return tag >= LUA_TSTRING;
+#endif
 }
 
 bool isUserdataBytecodeType(uint8_t ty)
@@ -1952,6 +1965,30 @@ std::optional<uint8_t> tryGetOperandTag(IrFunction& function, IrOp op)
     {
         if (arg->cmd == IrCmd::TAG_VECTOR)
             return LUA_TVECTOR;
+
+#if LUA_T16_NANTAG_VEC4
+        switch (arg->cmd)
+        {
+        case IrCmd::ADD_VEC:
+        case IrCmd::SUB_VEC:
+        case IrCmd::MUL_VEC:
+        case IrCmd::DIV_VEC:
+        case IrCmd::IDIV_VEC:
+        case IrCmd::MULADD_VEC:
+        case IrCmd::UNM_VEC:
+        case IrCmd::MIN_VEC:
+        case IrCmd::MAX_VEC:
+        case IrCmd::FLOOR_VEC:
+        case IrCmd::CEIL_VEC:
+        case IrCmd::ABS_VEC:
+        case IrCmd::SELECT_VEC:
+        case IrCmd::BUILD_VEC:
+        case IrCmd::BUFFER_READVECTOR:
+            return LUA_TVECTOR;
+        default:
+            break;
+        }
+#endif
 
         if (arg->cmd == IrCmd::LOAD_TVALUE && HAS_OP_C(*arg))
             return function.tagOp(OP_C(*arg));

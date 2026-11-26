@@ -27,13 +27,13 @@ static void emitBuiltinMathFrexp(IrRegAllocX64& regs, AssemblyBuilderX64& build,
     callWrap.call(qword[rNativeContext + offsetof(NativeContext, libm_frexp)]);
 
     build.vmovsd(luauRegValue(ra), xmm0);
-    build.mov(luauRegTag(ra), LUA_TNUMBER);
+    build.mov(luauRegTag(ra), encodeTagImm(LUA_TNUMBER));
 
     if (nresults > 1)
     {
         build.vcvtsi2sd(xmm0, xmm0, dword[sTemporarySlot + 0]);
         build.vmovsd(luauRegValue(ra + 1), xmm0);
-        build.mov(luauRegTag(ra + 1), LUA_TNUMBER);
+        build.mov(luauRegTag(ra + 1), encodeTagImm(LUA_TNUMBER));
     }
 }
 
@@ -46,12 +46,12 @@ static void emitBuiltinMathModf(IrRegAllocX64& regs, AssemblyBuilderX64& build, 
 
     build.vmovsd(xmm1, qword[sTemporarySlot + 0]);
     build.vmovsd(luauRegValue(ra), xmm1);
-    build.mov(luauRegTag(ra), LUA_TNUMBER);
+    build.mov(luauRegTag(ra), encodeTagImm(LUA_TNUMBER));
 
     if (nresults > 1)
     {
         build.vmovsd(luauRegValue(ra + 1), xmm0);
-        build.mov(luauRegTag(ra + 1), LUA_TNUMBER);
+        build.mov(luauRegTag(ra + 1), encodeTagImm(LUA_TNUMBER));
     }
 }
 

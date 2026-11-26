@@ -167,15 +167,39 @@ inline void setLuauReg(AssemblyBuilderX64& build, RegisterX64 tmp, int ri, Opera
 
 inline void jumpIfTagIs(AssemblyBuilderX64& build, int ri, lua_Type tag, Label& label)
 {
-    build.cmp(luauRegTag(ri), tag);
+    build.cmp(luauRegTag(ri), encodeTagImm(tag));
     build.jcc(ConditionX64::Equal, label);
 }
 
 inline void jumpIfTagIsNot(AssemblyBuilderX64& build, int ri, lua_Type tag, Label& label)
 {
-    build.cmp(luauRegTag(ri), tag);
+    build.cmp(luauRegTag(ri), encodeTagImm(tag));
     build.jcc(ConditionX64::NotEqual, label);
 }
+
+#if LUA_T16_NANTAG_VEC4
+// Sets BelowEqual iff src represents LUA_TVECTOR (inline < kNaNTagBase or escaped 0xffffffffu).
+inline void emitTestVectorTagX64(AssemblyBuilderX64& build, RegisterX64 tmp, OperandX64 src)
+{
+    CODEGEN_ASSERT(tmp.size == SizeX64::dword);
+    if (src.cat != CategoryX64::reg || src.base != tmp)
+        build.mov(tmp, src);
+    build.inc(tmp);
+    build.cmp(tmp, int32_t(kNaNTagBase));
+}
+
+// Decodes an encoded NaN-tag word in dst in-place to a 0..31 lua_Type value, clobbering tmp.
+inline void emitDecodeTagX64(AssemblyBuilderX64& build, RegisterX64 dst, RegisterX64 tmp)
+{
+    CODEGEN_ASSERT(dst.size == SizeX64::dword && tmp.size == SizeX64::dword && dst != tmp);
+    build.mov(tmp, dst);
+    build.inc(tmp);
+    build.and_(dst, 0x1f);
+    build.cmp(tmp, int32_t(kNaNTagBase));
+    build.mov(tmp, LUA_TVECTOR);
+    build.cmov(ConditionX64::BelowEqual, dst, tmp);
+}
+#endif
 
 // Note: fallthrough label should be placed after this condition
 inline void jumpIfFalsy(AssemblyBuilderX64& build, int ri, Label& target, Label& fallthrough)

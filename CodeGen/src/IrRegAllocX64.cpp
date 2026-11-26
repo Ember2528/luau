@@ -416,7 +416,7 @@ void IrRegAllocX64::preserve(IrInst& inst)
 
             // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag
             if (spill.valueKind != IrValueKind::Tvalue)
-                build.mov(luauRegTag(storeReg), 0);
+                build.mov(luauRegTag(storeReg), encodeTagImm(LUA_TNIL));
 
             if (!keepLazyLocations)
                 function.materializeRestoreLocation(spill.instIdx);

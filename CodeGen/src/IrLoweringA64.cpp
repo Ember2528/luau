@@ -223,6 +223,17 @@ static void emitInvokeLibm1P(AssemblyBuilderA64& build, size_t func, int arg)
 
 static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAllocA64& regs, int bfid, int res, int arg, int nresults)
 {
+    auto allocNumberTagReg = [&]() -> RegisterA64
+    {
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        emitLoadTagImm64A64(build, temp, LUA_TNUMBER);
+        return temp;
+    };
+    auto emitStoreNumberTag = [&](RegisterA64 tagReg, int slot)
+    {
+        emitStoreTagRegA64(build, tagReg, mem(rBase, slot * sizeof(TValue) + kTagLoadOffset));
+    };
+
     switch (bfid)
     {
     case LBF_MATH_FREXP:
@@ -231,9 +242,8 @@ static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAl
         emitInvokeLibm1P(build, offsetof(NativeContext, libm_frexp), arg);
         build.str(d0, mem(rBase, res * sizeof(TValue) + offsetof(TValue, value.n)));
 
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
-        build.mov(temp, LUA_TNUMBER);
-        build.str(temp, mem(rBase, res * sizeof(TValue) + offsetof(TValue, tt)));
+        RegisterA64 temp = allocNumberTagReg();
+        emitStoreNumberTag(temp, res);
 
         if (nresults == 2)
         {
@@ -242,7 +252,7 @@ static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAl
             build.scvtf(d1, temp2);
 
             build.str(d1, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, value.n)));
-            build.str(temp, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, tt)));
+            emitStoreNumberTag(temp, res + 1);
         }
         return true;
     }
@@ -253,14 +263,13 @@ static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAl
         build.ldr(d1, sTemporary);
         build.str(d1, mem(rBase, res * sizeof(TValue) + offsetof(TValue, value.n)));
 
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
-        build.mov(temp, LUA_TNUMBER);
-        build.str(temp, mem(rBase, res * sizeof(TValue) + offsetof(TValue, tt)));
+        RegisterA64 temp = allocNumberTagReg();
+        emitStoreNumberTag(temp, res);
 
         if (nresults == 2)
         {
             build.str(d0, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, value.n)));
-            build.str(temp, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, tt)));
+            emitStoreNumberTag(temp, res + 1);
         }
         return true;
     }
@@ -344,8 +353,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::LOAD_TAG:
     {
         inst.regA64 = regs.allocReg(KindA64::w, index);
-        AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
-        build.ldr(inst.regA64, addr);
+        emitLoadTagA64(build, castReg(KindA64::x, inst.regA64), tempAddr(OP_A(inst), kTagLoadOffset));
         break;
     }
     case IrCmd::LOAD_POINTER:
@@ -476,17 +484,23 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::STORE_TAG:
     {
-        AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
-        if (tagOp(OP_B(inst)) == 0)
+        uint8_t tag = tagOp(OP_B(inst));
+#if LUA_T16_NANTAG_VEC4
+        if (tag == LUA_TVECTOR)
         {
-            build.str(wzr, addr);
+            build.str(wzr, tempAddr(OP_A(inst), offsetof(TValue, tt)));
+            break;
         }
-        else
+        if (tag == LUA_TLIGHTUSERDATA)
         {
             RegisterA64 temp = regs.allocTemp(KindA64::w);
-            build.mov(temp, tagOp(OP_B(inst)));
-            build.str(temp, addr);
+            emitLoadTagImmA64(build, temp, tag);
+            build.str(temp, tempAddr(OP_A(inst), offsetof(TValue, tt)));
+            break;
         }
+#endif
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        emitStoreTagImmA64(build, temp, tempAddr(OP_A(inst), kTagLoadOffset), tag);
         break;
     }
     case IrCmd::STORE_POINTER:
@@ -548,12 +562,23 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::STORE_VECTOR:
     {
+#if LUA_T16_NANTAG_VEC4
+        if (HAS_OP_E(inst) &&
+            !(OP_E(inst).kind == IrOpKind::Constant && constOp(OP_E(inst)).kind == IrConstKind::Tag && tagOp(OP_E(inst)) != LUA_TVECTOR))
+        {
+            IrOp opW = (OP_E(inst).kind == IrOpKind::Constant && constOp(OP_E(inst)).kind == IrConstKind::Tag) ? IrOp() : OP_E(inst);
+            RegisterA64 vec = regs.allocTemp(KindA64::q);
+            packFloat4(vec, OP_B(inst), OP_C(inst), OP_D(inst), opW);
+            build.str(vec, tempAddr(OP_A(inst), offsetof(TValue, value)));
+            break;
+        }
+#endif
         RegisterA64 temp1 = tempFloat(OP_B(inst));
         RegisterA64 temp2 = tempFloat(OP_C(inst));
         RegisterA64 temp3 = tempFloat(OP_D(inst));
 
         AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, value));
-        CODEGEN_ASSERT(addr.kind == AddressKindA64::imm && addr.data % 4 == 0 && unsigned(addr.data + 8) / 4 <= AddressA64::kMaxOffset);
+        CODEGEN_ASSERT(addr.kind == AddressKindA64::imm && addr.data % 4 == 0 && unsigned(addr.data + 12) / 4 <= AddressA64::kMaxOffset);
 
         build.str(temp1, AddressA64(addr.base, addr.data + 0));
         build.str(temp2, AddressA64(addr.base, addr.data + 4));
@@ -561,9 +586,16 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         if (HAS_OP_E(inst))
         {
+#if LUA_T16_NANTAG_VEC4
+            CODEGEN_ASSERT(OP_E(inst).kind == IrOpKind::Constant && constOp(OP_E(inst)).kind == IrConstKind::Tag && tagOp(OP_E(inst)) != LUA_TVECTOR);
+            RegisterA64 temp = regs.allocTemp(KindA64::w);
+            emitLoadTagImmA64(build, temp, tagOp(OP_E(inst)));
+            build.str(temp, tempAddr(OP_A(inst), offsetof(TValue, tt)));
+#else
             RegisterA64 temp = regs.allocTemp(KindA64::w);
             build.mov(temp, tagOp(OP_E(inst)));
             build.str(temp, tempAddr(OP_A(inst), offsetof(TValue, tt)));
+#endif
         }
         break;
     }
@@ -578,10 +610,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     {
         int addrOffset = HAS_OP_D(inst) ? intOp(OP_D(inst)) : 0;
 
-        RegisterA64 tempt = regs.allocTemp(KindA64::w);
-        AddressA64 addrt = tempAddr(OP_A(inst), offsetof(TValue, tt) + addrOffset);
-        build.mov(tempt, tagOp(OP_B(inst)));
-        build.str(tempt, addrt);
+        RegisterA64 temptX = regs.allocTemp(KindA64::x);
+        RegisterA64 tempt = castReg(KindA64::w, temptX);
+        emitStoreTagImmA64(build, temptX, tempAddr(OP_A(inst), kTagLoadOffset + addrOffset), tagOp(OP_B(inst)));
 
         AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, value) + addrOffset);
 
@@ -589,9 +620,21 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             if (OP_C(inst).kind == IrOpKind::Constant)
             {
+#if LUA_T16_NANTAG_VEC4
+                if (intOp(OP_C(inst)))
+                {
+                    build.mov(tempt, 1);
+                    build.str(tempt, addr);
+                }
+                else
+                {
+                    build.str(wzr, addr);
+                }
+#else
                 // note: we reuse tag temp register as value for true booleans, and use built-in zero register for false values
                 CODEGEN_ASSERT(LUA_TBOOLEAN == 1);
                 build.str(intOp(OP_C(inst)) ? tempt : wzr, addr);
+#endif
             }
             else
                 build.str(regOp(OP_C(inst)), addr);
@@ -1097,10 +1140,17 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         // Check tag first
         build.umov_4s(temp, regOp(OP_A(inst)), 3);
+#if LUA_T16_NANTAG_VEC4
+        emitCompareTagA64(build, temp, LUA_TNIL);
+        build.b(ConditionA64::Equal, saveRhs); // rhs if 'A' is nil
+        emitCompareTagA64(build, temp, LUA_TBOOLEAN);
+        build.b(ConditionA64::NotEqual, exit); // Keep lhs if 'A' is not a boolean
+#else
         build.cmp(temp, uint16_t(LUA_TBOOLEAN));
 
         build.b(ConditionA64::UnsignedLess, saveRhs); // rhs if 'A' is nil
         build.b(ConditionA64::UnsignedGreater, exit); // Keep lhs if 'A' is not a boolean
+#endif
 
         // Check the boolean value
         build.umov_4s(temp, regOp(OP_A(inst)), 0);
@@ -1255,18 +1305,31 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         RegisterA64 temp = regs.allocTemp(KindA64::q);
         RegisterA64 temps = castReg(KindA64::s, temp);
+#if LUA_VECTOR_SIZE == 4
+        RegisterA64 tempw = regs.allocTemp(KindA64::q);
+        RegisterA64 tempws = castReg(KindA64::s, tempw);
+#endif
 
         build.fmul(temp, regOp(OP_A(inst)), regOp(OP_B(inst)));
 
-        if (FFlag::LuauCodegenMultiLaneDot)
+        if (LUA_VECTOR_SIZE == 4 || FFlag::LuauCodegenMultiLaneDot)
         {
             int lanes = intOp(OP_C(inst));
             CODEGEN_ASSERT(lanes == 3 || lanes == 4);
 
             if (lanes == 4)
             {
+#if LUA_VECTOR_SIZE == 4
+                // Match the VM's left-to-right four-lane reduction.
+                build.dup_4s(tempw, temp, 3);
+                build.faddp(inst.regA64, temps); // x+y
+                build.dup_4s(temp, temp, 2);
+                build.fadd(inst.regA64, inst.regA64, temps);  // +z
+                build.fadd(inst.regA64, inst.regA64, tempws); // +w
+#else
                 build.faddp(temp, temp, temp);   // x+y, z+w
                 build.faddp(inst.regA64, temps); // (x+y) + (z+w)
+#endif
             }
             else
             {
@@ -1312,6 +1375,24 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             Label notBool, exit;
 
+#if LUA_T16_NANTAG_VEC4
+            emitCompareTagA64(build, regOp(OP_A(inst)), LUA_TBOOLEAN);
+            build.b(ConditionA64::NotEqual, notBool);
+
+            if (OP_B(inst).kind == IrOpKind::Constant)
+                build.mov(inst.regA64, intOp(OP_B(inst)) == 0 ? 1 : 0);
+            else
+                build.eor(inst.regA64, regOp(OP_B(inst)), 1); // boolean => invert value
+
+            build.b(exit);
+
+            // not boolean => result is true iff tag was nil
+            build.setLabel(notBool);
+            emitCompareTagA64(build, regOp(OP_A(inst)), LUA_TNIL);
+            build.cset(inst.regA64, ConditionA64::Equal);
+
+            build.setLabel(exit);
+#else
             // use the fact that NIL is the only value less than BOOLEAN to do two tag comparisons at once
             CODEGEN_ASSERT(LUA_TNIL == 0 && LUA_TBOOLEAN == 1);
             build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TBOOLEAN));
@@ -1329,6 +1410,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cset(inst.regA64, ConditionA64::Less);
 
             build.setLabel(exit);
+#endif
         }
         break;
     }
@@ -1404,15 +1486,30 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // For equality comparison, 'luaV_equalval' expects tag to be equal before the call
         if (cond == IrCondition::Equal)
         {
-            RegisterA64 tempa = regs.allocTemp(KindA64::w);
-            RegisterA64 tempb = regs.allocTemp(KindA64::w);
+            RegisterA64 tempaX = regs.allocTemp(KindA64::x);
+            RegisterA64 tempbX = regs.allocTemp(KindA64::x);
+            RegisterA64 tempa = castReg(KindA64::w, tempaX);
+            RegisterA64 tempb = castReg(KindA64::w, tempbX);
 
-            build.ldr(tempa, tempAddr(OP_A(inst), offsetof(TValue, tt)));
-            build.ldr(tempb, tempAddr(OP_B(inst), offsetof(TValue, tt)));
+            emitLoadTagA64(build, tempaX, tempAddr(OP_A(inst), kTagLoadOffset));
+            emitLoadTagA64(build, tempbX, tempAddr(OP_B(inst), kTagLoadOffset));
             build.cmp(tempa, tempb);
 
+#if LUA_T16_NANTAG_VEC4
+            Label doCall;
+            build.b(ConditionA64::Equal, doCall);
+
+            emitTestVectorTagA64(build, tempa, tempa);
+            build.b(ConditionA64::CarrySet, skip);
+
+            emitTestVectorTagA64(build, tempb, tempb);
+            build.b(ConditionA64::CarrySet, skip);
+
+            build.setLabel(doCall);
+#else
             // If the tags are not equal, skip the call and set result to 0
             build.b(ConditionA64::NotEqual, skip);
+#endif
         }
 
         // We have reserved the result register, so we can free it now so it is not recorded in the spill sequence
@@ -1471,9 +1568,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         else if (OP_A(inst).kind == IrOpKind::VmReg)
         {
-            aReg = regs.allocTemp(KindA64::w);
-            AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
-            build.ldr(aReg, addr);
+            RegisterA64 aRegX = regs.allocTemp(KindA64::x);
+            emitLoadTagA64(build, aRegX, tempAddr(OP_A(inst), kTagLoadOffset));
+            aReg = castReg(KindA64::w, aRegX);
         }
         else
         {
@@ -1486,15 +1583,50 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         else if (OP_B(inst).kind == IrOpKind::VmReg)
         {
-            bReg = regs.allocTemp(KindA64::w);
-            AddressA64 addr = tempAddr(OP_B(inst), offsetof(TValue, tt));
-            build.ldr(bReg, addr);
+            RegisterA64 bRegX = regs.allocTemp(KindA64::x);
+            emitLoadTagA64(build, bRegX, tempAddr(OP_B(inst), kTagLoadOffset));
+            bReg = castReg(KindA64::w, bRegX);
         }
         else
         {
             CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::Constant);
         }
 
+#if LUA_T16_NANTAG_VEC4
+        if (OP_A(inst).kind == IrOpKind::Constant || OP_B(inst).kind == IrOpKind::Constant)
+        {
+            uint8_t ctag = OP_A(inst).kind == IrOpKind::Constant ? tagOp(OP_A(inst)) : tagOp(OP_B(inst));
+            RegisterA64 r = OP_A(inst).kind == IrOpKind::Constant ? bReg : aReg;
+
+            if (ctag == LUA_TVECTOR)
+            {
+                RegisterA64 temp = regs.allocTemp(KindA64::w);
+                emitTestVectorTagA64(build, temp, r);
+                build.cset(inst.regA64, cond == IrCondition::Equal ? ConditionA64::CarryClear : ConditionA64::CarrySet);
+            }
+            else
+            {
+                emitCompareTagA64(build, r, ctag);
+                build.cset(inst.regA64, getConditionInt(cond));
+            }
+        }
+        else
+        {
+            Label done;
+            build.cmp(aReg, bReg);
+            build.cset(inst.regA64, getConditionInt(cond));
+            build.b(ConditionA64::Equal, done);
+
+            RegisterA64 temp = regs.allocTemp(KindA64::w);
+            emitTestVectorTagA64(build, temp, aReg);
+            build.b(ConditionA64::CarrySet, done);
+
+            emitTestVectorTagA64(build, temp, bReg);
+            build.cset(inst.regA64, cond == IrCondition::Equal ? ConditionA64::CarryClear : ConditionA64::CarrySet);
+
+            build.setLabel(done);
+        }
+#else
         if (OP_A(inst).kind == IrOpKind::Constant)
         {
             build.cmp(bReg, uint16_t(tagOp(OP_A(inst))));
@@ -1510,6 +1642,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cmp(aReg, bReg);
             build.cset(inst.regA64, getConditionInt(cond));
         }
+#endif
         break;
     }
     case IrCmd::CMP_SPLIT_TVALUE:
@@ -1528,7 +1661,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         if (OP_A(inst).kind != IrOpKind::Constant)
         {
-            build.cmp(regOp(OP_A(inst)), uint16_t(tagOp(OP_B(inst))));
+            emitCompareTagA64(build, regOp(OP_A(inst)), tagOp(OP_B(inst)));
             build.cset(temp, getConditionInt(cond));
         }
         else
@@ -1597,32 +1730,32 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     case IrCmd::JUMP_IF_TRUTHY:
     {
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
-        build.ldr(temp, mem(rBase, vmRegOp(OP_A(inst)) * sizeof(TValue) + offsetof(TValue, tt)));
+        RegisterA64 tempX = regs.allocTemp(KindA64::x);
+        RegisterA64 temp = castReg(KindA64::w, tempX);
+        emitLoadTagA64(build, tempX, tempAddr(OP_A(inst), kTagLoadOffset));
         // nil => falsy
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.cbz(temp, labelOp(OP_C(inst)));
+        emitJumpIfNilA64(build, temp, labelOp(OP_C(inst)));
         // not boolean => truthy
-        build.cmp(temp, uint16_t(LUA_TBOOLEAN));
+        emitCompareTagA64(build, temp, LUA_TBOOLEAN);
         build.b(ConditionA64::NotEqual, labelOp(OP_B(inst)));
         // compare boolean value
-        build.ldr(temp, mem(rBase, vmRegOp(OP_A(inst)) * sizeof(TValue) + offsetof(TValue, value)));
+        build.ldr(temp, tempAddr(OP_A(inst), offsetof(TValue, value)));
         build.cbnz(temp, labelOp(OP_B(inst)));
         jumpOrFallthrough(blockOp(OP_C(inst)), next);
         break;
     }
     case IrCmd::JUMP_IF_FALSY:
     {
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
-        build.ldr(temp, mem(rBase, vmRegOp(OP_A(inst)) * sizeof(TValue) + offsetof(TValue, tt)));
+        RegisterA64 tempX = regs.allocTemp(KindA64::x);
+        RegisterA64 temp = castReg(KindA64::w, tempX);
+        emitLoadTagA64(build, tempX, tempAddr(OP_A(inst), kTagLoadOffset));
         // nil => falsy
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.cbz(temp, labelOp(OP_B(inst)));
+        emitJumpIfNilA64(build, temp, labelOp(OP_B(inst)));
         // not boolean => truthy
-        build.cmp(temp, uint16_t(LUA_TBOOLEAN));
+        emitCompareTagA64(build, temp, LUA_TBOOLEAN);
         build.b(ConditionA64::NotEqual, labelOp(OP_C(inst)));
         // compare boolean value
-        build.ldr(temp, mem(rBase, vmRegOp(OP_A(inst)) * sizeof(TValue) + offsetof(TValue, value)));
+        build.ldr(temp, tempAddr(OP_A(inst), offsetof(TValue, value)));
         build.cbz(temp, labelOp(OP_B(inst)));
         jumpOrFallthrough(blockOp(OP_C(inst)), next);
         break;
@@ -1639,9 +1772,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         else if (OP_A(inst).kind == IrOpKind::VmReg)
         {
-            aReg = regs.allocTemp(KindA64::w);
-            AddressA64 addr = tempAddr(OP_A(inst), offsetof(TValue, tt));
-            build.ldr(aReg, addr);
+            RegisterA64 aRegX = regs.allocTemp(KindA64::x);
+            emitLoadTagA64(build, aRegX, tempAddr(OP_A(inst), kTagLoadOffset));
+            aReg = castReg(KindA64::w, aRegX);
         }
         else
         {
@@ -1654,15 +1787,61 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         else if (OP_B(inst).kind == IrOpKind::VmReg)
         {
-            bReg = regs.allocTemp(KindA64::w);
-            AddressA64 addr = tempAddr(OP_B(inst), offsetof(TValue, tt));
-            build.ldr(bReg, addr);
+            RegisterA64 bRegX = regs.allocTemp(KindA64::x);
+            emitLoadTagA64(build, bRegX, tempAddr(OP_B(inst), kTagLoadOffset));
+            bReg = castReg(KindA64::w, bRegX);
         }
         else
         {
             CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::Constant);
         }
 
+#if LUA_T16_NANTAG_VEC4
+        (void)zr;
+        auto emitBranch = [&](ConditionA64 eqCond, ConditionA64 neCond)
+        {
+            if (isFallthroughBlock(blockOp(OP_D(inst)), next))
+            {
+                build.b(eqCond, labelOp(OP_C(inst)));
+                jumpOrFallthrough(blockOp(OP_D(inst)), next);
+            }
+            else
+            {
+                build.b(neCond, labelOp(OP_D(inst)));
+                jumpOrFallthrough(blockOp(OP_C(inst)), next);
+            }
+        };
+
+        if (OP_A(inst).kind == IrOpKind::Constant || OP_B(inst).kind == IrOpKind::Constant)
+        {
+            uint8_t ctag = OP_A(inst).kind == IrOpKind::Constant ? tagOp(OP_A(inst)) : tagOp(OP_B(inst));
+            RegisterA64 r = OP_A(inst).kind == IrOpKind::Constant ? bReg : aReg;
+
+            if (ctag == LUA_TVECTOR)
+            {
+                RegisterA64 temp = regs.allocTemp(KindA64::w);
+                emitTestVectorTagA64(build, temp, r);
+                emitBranch(ConditionA64::CarryClear, ConditionA64::CarrySet);
+            }
+            else
+            {
+                emitCompareTagA64(build, r, ctag);
+                emitBranch(ConditionA64::Equal, ConditionA64::NotEqual);
+            }
+        }
+        else
+        {
+            build.cmp(aReg, bReg);
+            build.b(ConditionA64::Equal, labelOp(OP_C(inst)));
+
+            RegisterA64 temp = regs.allocTemp(KindA64::w);
+            emitTestVectorTagA64(build, temp, aReg);
+            build.b(ConditionA64::CarrySet, labelOp(OP_D(inst)));
+
+            emitTestVectorTagA64(build, temp, bReg);
+            emitBranch(ConditionA64::CarryClear, ConditionA64::CarrySet);
+        }
+#else
         if (OP_A(inst).kind == IrOpKind::Constant && tagOp(OP_A(inst)) == 0)
             zr = bReg;
         else if (OP_B(inst).kind == IrOpKind::Constant && tagOp(OP_B(inst)) == 0)
@@ -1690,6 +1869,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
                 build.b(ConditionA64::NotEqual, labelOp(OP_D(inst)));
             jumpOrFallthrough(blockOp(OP_C(inst)), next);
         }
+#endif
         break;
     }
     case IrCmd::JUMP_CMP_INT:
@@ -2088,7 +2268,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             {
                 RegisterA64 temp = regs.allocTemp(KindA64::x);
 
-                uint32_t vec[4] = {asU32, asU32, asU32, 0};
+                uint32_t vec[4] = {asU32, asU32, asU32, LUA_VECTOR_SIZE == 4 ? asU32 : 0};
                 build.adr(temp, vec, sizeof(vec));
                 build.ldr(inst.regA64, temp);
             }
@@ -2101,8 +2281,19 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         }
         break;
     }
+    case IrCmd::BUILD_VEC:
+#if LUA_T16_NANTAG_VEC4
+        inst.regA64 = regs.allocReg(KindA64::q, index);
+        packFloat4(inst.regA64, OP_A(inst), OP_B(inst), OP_C(inst), OP_D(inst));
+#else
+        CODEGEN_ASSERT(!"BUILD_VEC is only used under LUA_T16_NANTAG_VEC4");
+#endif
+        break;
     case IrCmd::TAG_VECTOR:
     {
+#if LUA_T16_NANTAG_VEC4
+        CODEGEN_ASSERT(!"TAG_VECTOR is not used under LUA_T16_NANTAG_VEC4");
+#else
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
         RegisterA64 reg = regOp(OP_A(inst));
@@ -2113,10 +2304,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.mov(tempw, LUA_TVECTOR);
         build.ins_4s(inst.regA64, tempw, 3);
+#endif
         break;
     }
     case IrCmd::UNTAG_VECTOR:
     {
+#if LUA_T16_NANTAG_VEC4
+        CODEGEN_ASSERT(!"UNTAG_VECTOR is not used under LUA_T16_NANTAG_VEC4");
+#else
         inst.regA64 = regs.allocReuse(KindA64::q, index, {OP_A(inst)});
 
         RegisterA64 reg = regOp(OP_A(inst));
@@ -2125,6 +2320,27 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.mov(inst.regA64, reg);
 
         build.ins_4s(inst.regA64, wzr, 3);
+#endif
+        break;
+    }
+    case IrCmd::CHECK_INLINE_VEC:
+    {
+#if LUA_T16_NANTAG_VEC4
+        Label fresh;
+        Label& fail = getTargetLabel(OP_C(inst), index, fresh);
+        RegisterA64 temp = regs.allocTemp(KindA64::w);
+        RegisterA64 src = regOp(OP_A(inst));
+        int lane = intOp(OP_B(inst));
+        if (lane == 0 && src.kind == KindA64::s)
+            build.fmov(temp, src);
+        else
+            build.umov_4s(temp, src.kind == KindA64::q ? src : castReg(KindA64::q, src), lane);
+        emitTestInlineVectorTagA64(build, temp);
+        build.b(ConditionA64::CarrySet, fail);
+        finalizeTargetLabel(OP_C(inst), index, fresh);
+#else
+        CODEGEN_ASSERT(!"CHECK_INLINE_VEC is only used under LUA_T16_NANTAG_VEC4");
+#endif
         break;
     }
     case IrCmd::TRUNCATE_UINT:
@@ -2383,8 +2599,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.ldr(tempTag, addrConstTag);
 
         // If the constant for the import is set, we will use it directly, otherwise we have to call an import path lookup function
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.cbnz(tempTag, skip);
+        emitJumpIfNotNilA64(build, tempTag, skip);
 
         {
             build.mov(x0, rState);
@@ -2433,7 +2648,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // uprefs[] is either an actual value, or it points to UpVal object which has a pointer to value
         Label skip;
         build.ldr(temp2, mem(temp1, offsetof(TValue, tt)));
-        build.cmp(temp2, uint16_t(LUA_TUPVAL));
+        emitCompareTagA64(build, temp2, LUA_TUPVAL);
         build.b(ConditionA64::NotEqual, skip);
 
         // UpVal.v points to the value (either on stack, or on heap inside each UpVal, but we can deref it unconditionally)
@@ -2456,7 +2671,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.ldr(temp2, mem(temp1, offsetof(UpVal, v)));
         build.str(regOp(OP_B(inst)), temp2);
 
-        if (OP_C(inst).kind == IrOpKind::Undef || isGCO(tagOp(OP_C(inst))))
+        if (OP_C(inst).kind == IrOpKind::Undef || isMaybeGCO(tagOp(OP_C(inst))))
         {
             RegisterA64 value = regOp(OP_B(inst));
 
@@ -2483,6 +2698,18 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         Label fresh; // used when guard aborts execution or jumps to a VM exit
         Label& fail = getTargetLabel(OP_C(inst), index, fresh);
 
+#if LUA_T16_NANTAG_VEC4
+        if (tagOp(OP_B(inst)) == LUA_TVECTOR)
+        {
+            emitTestInlineVectorTagA64(build, regOp(OP_A(inst)));
+            build.b(ConditionA64::CarrySet, fail);
+        }
+        else
+        {
+            emitCompareTagA64(build, regOp(OP_A(inst)), tagOp(OP_B(inst)));
+            build.b(ConditionA64::NotEqual, fail);
+        }
+#else
         if (tagOp(OP_B(inst)) == 0)
         {
             build.cbnz(regOp(OP_A(inst)), fail);
@@ -2492,6 +2719,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.cmp(regOp(OP_A(inst)), uint16_t(tagOp(OP_B(inst))));
             build.b(ConditionA64::NotEqual, fail);
         }
+#endif
 
         finalizeTargetLabel(OP_C(inst), index, fresh);
         break;
@@ -2509,11 +2737,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         if (OP_A(inst).kind != IrOpKind::Constant)
         {
             // fail to fallback on 'nil' (falsy)
-            CODEGEN_ASSERT(LUA_TNIL == 0);
-            build.cbz(regOp(OP_A(inst)), target);
+            emitJumpIfNilA64(build, regOp(OP_A(inst)), target);
 
             // skip value test if it's not a boolean (truthy)
-            build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TBOOLEAN));
+            emitCompareTagA64(build, regOp(OP_A(inst)), LUA_TBOOLEAN);
             build.b(ConditionA64::NotEqual, skip);
         }
 
@@ -2635,9 +2862,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(temp1, temp2);
         build.b(ConditionA64::NotEqual, mismatch);
 
-        build.ldr(temp1w, mem(regOp(OP_A(inst)), offsetof(LuaNode, val.tt)));
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.cbz(temp1w, mismatch);
+        emitLoadTagA64(build, temp1, mem(regOp(OP_A(inst)), offsetof(LuaNode, val) + kTagLoadOffset));
+        emitJumpIfNilA64(build, temp1w, mismatch);
 
         if (inst.cmd == IrCmd::JUMP_SLOT_MATCH)
             jumpOrFallthrough(blockOp(OP_C(inst)), next);
@@ -2659,11 +2885,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::CHECK_NODE_VALUE:
     {
         Label fresh; // used when guard aborts execution or jumps to a VM exit
-        RegisterA64 temp = regs.allocTemp(KindA64::w);
+        RegisterA64 temp = regs.allocTemp(KindA64::x);
+        RegisterA64 tempw = castReg(KindA64::w, temp);
 
-        build.ldr(temp, mem(regOp(OP_A(inst)), offsetof(LuaNode, val.tt)));
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.cbz(temp, getTargetLabel(OP_B(inst), index, fresh));
+        emitLoadTagA64(build, temp, mem(regOp(OP_A(inst)), offsetof(LuaNode, val) + kTagLoadOffset));
+        emitJumpIfNilA64(build, tempw, getTargetLabel(OP_B(inst), index, fresh));
         finalizeTargetLabel(OP_B(inst), index, fresh);
         break;
     }
@@ -2953,6 +3179,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
                 // Record the tag in the tag mask
                 build.ldr(temp1, mem(rBase, vmReg * sizeof(TValue) + offsetof(TValue, tt)));
+#if LUA_T16_NANTAG_VEC4
+                emitDecodeTagA64(build, temp1, temp2, temp1);
+#endif
                 build.mov(temp2, 1);
                 build.lsl(temp2, temp2, temp1);
                 build.ldr(temp1, mem(slot, 4));
@@ -2969,7 +3198,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
                 // Make sure it's actually a userdata type and count a hit if it is
                 Label skip, compare;
                 build.ldr(temp1, mem(rBase, vmReg * sizeof(TValue) + offsetof(TValue, tt)));
-                build.cmp(temp1, uint16_t(LUA_TUSERDATA));
+                emitCompareTagA64(build, temp1, LUA_TUSERDATA);
                 build.b(ConditionA64::NotEqual, skip);
 
                 // Increment (32 bit)
@@ -3216,9 +3445,15 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // clear extra variables since we might have more than two
         if (aux > 2)
         {
+#if LUA_T16_NANTAG_VEC4
+            emitLoadTagImm64A64(build, x6, LUA_TNIL);
+            for (int i = 2; i < aux; ++i)
+                emitStoreTagRegA64(build, x6, mem(rBase, (ra + 3 + i) * sizeof(TValue) + kTagLoadOffset));
+#else
             CODEGEN_ASSERT(LUA_TNIL == 0);
             for (int i = 2; i < aux; ++i)
                 build.str(wzr, mem(rBase, (ra + 3 + i) * sizeof(TValue) + offsetof(TValue, tt)));
+#endif
         }
 
         // x1 = table and w2 = index are also the second and third arguments of the node
@@ -3242,9 +3477,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // if element is nil, we increment the index; if it's not, we still need 'index + 1' inside
         build.add(w2, w2, uint16_t(1));
 
-        CODEGEN_ASSERT(LUA_TNIL == 0);
-        build.ldr(w6, mem(x4, offsetof(TValue, tt)));
-        build.cbz(w6, skipArrayNil);
+        emitLoadTagA64(build, x6, mem(x4, kTagLoadOffset));
+        emitJumpIfNilA64(build, w6, skipArrayNil);
 
         // setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(index + 1)), LU_TAG_ITERATOR);
         build.str(w2, mem(rBase, (ra + 2) * sizeof(TValue) + offsetof(TValue, value.p)));
@@ -3254,8 +3488,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // setnvalue(ra + 3, double(index + 1));
         build.scvtf(d0, w2);
         build.str(d0, mem(rBase, (ra + 3) * sizeof(TValue) + offsetof(TValue, value.n)));
-        build.mov(w6, LUA_TNUMBER);
-        build.str(w6, mem(rBase, (ra + 3) * sizeof(TValue) + offsetof(TValue, tt)));
+        emitStoreTagImmA64(build, x6, mem(rBase, (ra + 3) * sizeof(TValue) + kTagLoadOffset), LUA_TNUMBER);
 
         // setobj2s(L, ra + 4, e);
         build.ldr(q0, mem(x4, 0));
@@ -3823,7 +4056,16 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         CODEGEN_ASSERT(sizeof(TString*) == 8);
 
         if (OP_A(inst).kind == IrOpKind::Inst)
+        {
+#if LUA_T16_NANTAG_VEC4
+            RegisterA64 temp1 = regs.allocTemp(KindA64::w);
+            RegisterA64 temp2 = regs.allocTemp(KindA64::w);
+            emitDecodeTagA64(build, temp2, temp1, regOp(OP_A(inst)));
+            build.add(inst.regA64, rGlobalState, temp2, 3); // implicit uxtw
+#else
             build.add(inst.regA64, rGlobalState, regOp(OP_A(inst)), 3); // implicit uxtw
+#endif
+        }
         else if (OP_A(inst).kind == IrOpKind::Constant)
             build.add(inst.regA64, rGlobalState, uint16_t(tagOp(OP_A(inst)) * 8));
         else
@@ -3948,7 +4190,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     case IrCmd::BUFFER_READVECTOR:
     {
-        CODEGEN_ASSERT(intOp(OP_D(inst)) == 2 || intOp(OP_D(inst)) == 3);
+        int count = intOp(OP_D(inst));
+        CODEGEN_ASSERT(count == 2 || count == 3 || (LUA_VECTOR_SIZE == 4 && count == 4));
         inst.regA64 = regs.allocReg(KindA64::q, index);
 
         AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_C(inst)));
@@ -3956,34 +4199,49 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterA64 base = regs.allocTemp(KindA64::x);
         build.add(base, addr.base, uint16_t(addr.data));
 
-        // loading into the 'd' view zeroes the upper 64 bits, so a 2-component read is already [x, y, 0, 0]
-        build.ldr(castReg(KindA64::d, inst.regA64), mem(base, 0));
-
-        if (intOp(OP_D(inst)) == 3)
+        if (count == 4)
         {
-            RegisterA64 tempz = regs.allocTemp(KindA64::q);
-            build.ldr(castReg(KindA64::s, tempz), mem(base, 8));
-            build.ins_4s(inst.regA64, 2, tempz, 0); // z into lane 2
+            build.ldr(inst.regA64, mem(base, 0));
+        }
+        else
+        {
+            // loading into the 'd' view zeroes the upper 64 bits, so a 2-component read is already [x, y, 0, 0]
+            build.ldr(castReg(KindA64::d, inst.regA64), mem(base, 0));
+
+            if (count == 3)
+            {
+                RegisterA64 tempz = regs.allocTemp(KindA64::q);
+                build.ldr(castReg(KindA64::s, tempz), mem(base, 8));
+                build.ins_4s(inst.regA64, 2, tempz, 0); // z into lane 2
+            }
         }
         break;
     }
 
     case IrCmd::BUFFER_WRITEVECTOR:
     {
-        CODEGEN_ASSERT(intOp(OP_E(inst)) == 2 || intOp(OP_E(inst)) == 3);
+        int count = intOp(OP_E(inst));
+        CODEGEN_ASSERT(count == 2 || count == 3 || (LUA_VECTOR_SIZE == 4 && count == 4));
         RegisterA64 value = regOp(OP_C(inst));
 
         AddressA64 addr = tempAddrBuffer(OP_A(inst), OP_B(inst), tagOp(OP_D(inst)));
         RegisterA64 base = regs.allocTemp(KindA64::x);
         build.add(base, addr.base, uint16_t(addr.data));
 
-        build.str(castReg(KindA64::d, value), mem(base, 0)); // x, y
-
-        if (intOp(OP_E(inst)) == 3)
+        if (count == 4)
         {
-            RegisterA64 tempz = regs.allocTemp(KindA64::q);
-            build.dup_4s(tempz, value, 2); // broadcast lane 2 (z)
-            build.str(castReg(KindA64::s, tempz), mem(base, 8));
+            build.str(value, mem(base, 0));
+        }
+        else
+        {
+            build.str(castReg(KindA64::d, value), mem(base, 0)); // x, y
+
+            if (count == 3)
+            {
+                RegisterA64 tempz = regs.allocTemp(KindA64::q);
+                build.dup_4s(tempz, value, 2); // broadcast lane 2 (z)
+                build.str(castReg(KindA64::s, tempz), mem(base, 8));
+            }
         }
         break;
     }
@@ -4273,6 +4531,72 @@ void IrLoweringA64::incrementCounterAt(size_t offset)
     regs.freeTemp(temp2);
 }
 
+#if LUA_T16_NANTAG_VEC4
+void IrLoweringA64::packFloat4(RegisterA64 dst, IrOp x, IrOp y, IrOp z, IrOp w)
+{
+    auto getConstBits = [&](IrOp op, uint32_t& bits) -> bool
+    {
+        if (op.kind == IrOpKind::None)
+        {
+            bits = 0;
+            return true;
+        }
+        if (op.kind != IrOpKind::Constant)
+            return false;
+        bits = getFloatBits(float(doubleOp(op)));
+        return true;
+    };
+
+    uint32_t bx = 0, by = 0, bz = 0, bw = 0;
+    if (getConstBits(x, bx) && getConstBits(y, by) && getConstBits(z, bz) && getConstBits(w, bw))
+    {
+        if (bx == 0 && by == 0 && bz == 0 && bw == 0)
+        {
+            build.fmov(castReg(KindA64::d, dst), xzr);
+        }
+        else
+        {
+            RegisterA64 temp = regs.allocTemp(KindA64::x);
+            uint32_t vec[4] = {bx, by, bz, bw};
+            build.adr(temp, vec, sizeof(vec));
+            build.ldr(dst, temp);
+            regs.freeTemp(temp);
+        }
+        return;
+    }
+
+    // Parallel NEON pack: dst = [x, y, ?, ?], zw = [z, w, ?, ?], dst = [x, y, z, w].
+    RegisterA64 rx = tempFloat(x);
+    RegisterA64 ry = tempFloat(y);
+    build.zip1_4s(dst, castReg(KindA64::q, rx), castReg(KindA64::q, ry));
+    if (x.kind != IrOpKind::Inst)
+        regs.freeTemp(rx);
+    if (y.kind != IrOpKind::Inst)
+        regs.freeTemp(ry);
+
+    RegisterA64 rz = tempFloat(z);
+    RegisterA64 rw;
+    if (w.kind == IrOpKind::None)
+    {
+        rw = regs.allocTemp(KindA64::s);
+        build.fmov(rw, wzr);
+    }
+    else
+    {
+        rw = tempFloat(w);
+    }
+    RegisterA64 zw = z.kind != IrOpKind::Inst ? castReg(KindA64::q, rz) : regs.allocTemp(KindA64::q);
+    build.zip1_4s(zw, castReg(KindA64::q, rz), castReg(KindA64::q, rw));
+    build.zip1_2d(dst, dst, zw);
+    if (z.kind != IrOpKind::Inst)
+        regs.freeTemp(rz);
+    else
+        regs.freeTemp(zw);
+    if (w.kind != IrOpKind::Inst)
+        regs.freeTemp(rw);
+}
+#endif
+
 void IrLoweringA64::checkObjectBarrierConditions(RegisterA64 object, RegisterA64 temp, RegisterA64 ra, IrOp raOp, int ratag, Label& skip)
 {
     RegisterA64 tempw = castReg(KindA64::w, temp);
@@ -4286,12 +4610,10 @@ void IrLoweringA64::checkObjectBarrierConditions(RegisterA64 object, RegisterA64
         }
         else
         {
-            AddressA64 addr = tempAddr(raOp, offsetof(TValue, tt), temp);
-            build.ldr(tempw, addr);
+            emitLoadTagA64(build, temp, tempAddr(raOp, kTagLoadOffset, temp));
         }
 
-        build.cmp(tempw, uint16_t(LUA_TSTRING));
-        build.b(ConditionA64::Less, skip);
+        emitCheckCollectableA64(build, tempw, skip);
     }
 
     // isblack(obj2gco(o))
@@ -4382,7 +4704,11 @@ RegisterA64 IrLoweringA64::tempFloat(IrOp op)
 
             uint32_t vali = getFloatBits(val);
 
-            if ((vali & 0xffff) == 0)
+            if (vali == 0)
+            {
+                build.fmov(temp, wzr);
+            }
+            else if ((vali & 0xffff) == 0)
             {
                 RegisterA64 temp2 = regs.allocTemp(KindA64::w);
 

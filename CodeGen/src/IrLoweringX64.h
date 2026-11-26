@@ -48,6 +48,9 @@ struct IrLoweringX64
 
     void storeFloat(OperandX64 dst, IrOp src);
     void storeDoubleAsFloat(OperandX64 dst, IrOp src);
+#if LUA_T16_NANTAG_VEC4
+    void packFloat4(RegisterX64 dst, IrOp x, IrOp y, IrOp z, IrOp w);
+#endif
     void checkSafeEnv(IrOp target, uint32_t index, const IrBlock& next);
 
     void allocAndIncrementCounterAt(CodeGenCounter kind, uint32_t pcpos);

@@ -659,7 +659,29 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool
 
             // Partial value store should not have an interpretation in VM/GC and is protected by 'nil' tag
             if (loc.kind != IrValueKind::Tvalue)
+            {
+#if LUA_T16_NANTAG_VEC4
+                AddressA64 nilAddr = mem(rBase, storeReg * sizeof(TValue) + kTagLoadOffset);
+                if (def.regA64.kind == KindA64::x || def.regA64.kind == KindA64::w)
+                {
+                    RegisterA64 nilReg = def.regA64.kind == KindA64::x ? def.regA64 : castReg(KindA64::x, def.regA64);
+                    emitStoreTagImmA64(build, nilReg, nilAddr, LUA_TNIL);
+                }
+                else if (gpr.free != 0)
+                {
+                    RegisterA64 nilReg = RegisterA64{KindA64::x, uint8_t(countrz(gpr.free))};
+                    emitStoreTagImmA64(build, nilReg, nilAddr, LUA_TNIL);
+                }
+                else
+                {
+                    build.str(x16, sTemporary);
+                    emitStoreTagImmA64(build, x16, nilAddr, LUA_TNIL);
+                    build.ldr(x16, sTemporary);
+                }
+#else
                 build.str(wzr, mem(rBase, storeReg * sizeof(TValue) + offsetof(TValue, tt)));
+#endif
+            }
 
             if (!keepLazyLocations)
                 function.materializeRestoreLocation(targetInstIdx);

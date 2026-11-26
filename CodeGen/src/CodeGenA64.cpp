@@ -147,10 +147,10 @@ void emitReturn(AssemblyBuilderA64& build, ModuleHelpers& helpers)
 
     // TODO: cmp above could compute this and flags using subs
     build.sub(w2, w3, w2); // counter = nresults - written
-    build.mov(w4, LUA_TNIL);
+    emitLoadTagImm64A64(build, x4, LUA_TNIL);
 
     Label repeatNilLoop = build.setLabel();
-    build.str(w4, mem(x1, offsetof(TValue, tt)));
+    emitStoreTagRegA64(build, x4, mem(x1, kTagLoadOffset));
     build.add(x1, x1, uint16_t(sizeof(TValue)));
     build.sub(w2, w2, uint16_t(1));
     build.cbnz(w2, repeatNilLoop);

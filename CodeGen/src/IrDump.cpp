@@ -330,10 +330,14 @@ const char* getCmdName(IrCmd cmd)
         return "NUM_TO_FLOAT";
     case IrCmd::FLOAT_TO_VEC:
         return "FLOAT_TO_VEC";
+    case IrCmd::BUILD_VEC:
+        return "BUILD_VEC";
     case IrCmd::TAG_VECTOR:
         return "TAG_VECTOR";
     case IrCmd::UNTAG_VECTOR:
         return "UNTAG_VECTOR";
+    case IrCmd::CHECK_INLINE_VEC:
+        return "CHECK_INLINE_VEC";
     case IrCmd::TRUNCATE_UINT:
         return "TRUNCATE_UINT";
     case IrCmd::ADJUST_STACK_TO_REG:

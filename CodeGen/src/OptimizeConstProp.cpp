@@ -42,6 +42,18 @@ constexpr uint32_t kRegisterVersionLimit = 0x0007ffff;
 struct RegisterInfo
 {
     uint8_t tag = 0xff;
+#if LUA_T16_NANTAG_VEC4
+    bool inlineVector = false;
+    bool zeroWVector = false;
+
+    void clearVectorFlags()
+    {
+        inlineVector = false;
+        zeroWVector = false;
+    }
+#else
+    void clearVectorFlags() {}
+#endif
     IrOp value;
 
     // Used to quickly invalidate links between SSA values and register memory
@@ -177,6 +189,7 @@ struct ConstPropState
             if (info->tag != tag)
             {
                 info->tag = tag;
+                info->clearVectorFlags();
                 info->version++;
 
                 if (info->version == kRegisterVersionLimit)
@@ -184,6 +197,172 @@ struct ConstPropState
             }
         }
     }
+
+#if LUA_T16_NANTAG_VEC4
+    static bool isSafeInlineFloatConst(double v)
+    {
+        float f = float(v);
+        uint32_t bits;
+        memcpy(&bits, &f, sizeof(bits));
+        return bits < kNaNTagBase;
+    }
+
+    static bool isPositiveZeroFloatConst(double v)
+    {
+        float f = float(v);
+        uint32_t bits;
+        memcpy(&bits, &f, sizeof(bits));
+        return bits == 0;
+    }
+
+    bool isKnownSafeFloat(IrOp op)
+    {
+        if (std::optional<double> v = function.asDoubleOp(op))
+            return isSafeInlineFloatConst(*v);
+
+        if (op.kind == IrOpKind::Inst)
+        {
+            if (instSafeFloat.contains(op.index))
+                return true;
+
+            if (IrInst* a = function.asInstOp(op))
+            {
+                if (a->cmd == IrCmd::LOAD_FLOAT && function.intOp(OP_B(*a)) == 12)
+                    return isKnownInlineVector(OP_A(*a));
+                if (a->cmd == IrCmd::EXTRACT_VEC && function.intOp(OP_B(*a)) == 3)
+                    return isKnownInlineVector(OP_A(*a));
+            }
+        }
+
+        return false;
+    }
+
+    bool isKnownInlineVector(IrOp op)
+    {
+        if (op.kind == IrOpKind::VmConst && function.proto)
+        {
+            const TValue* tv = &function.proto->k[vmConstOp(op)];
+            return ttisvector(tv) && luauIsInlineVector(tv);
+        }
+
+        if (RegisterInfo* info = tryGetRegisterInfo(op))
+        {
+            if (info->tag == LUA_TVECTOR && info->inlineVector)
+                return true;
+        }
+
+        if (op.kind == IrOpKind::Inst)
+        {
+            if (instInlineVector.contains(op.index))
+                return true;
+
+            if (IrInst* a = function.asInstOp(op))
+            {
+                if (a->cmd == IrCmd::LOAD_TAG || a->cmd == IrCmd::LOAD_TVALUE)
+                    return isKnownInlineVector(OP_A(*a));
+                if (a->cmd == IrCmd::BUFFER_READVECTOR && function.intOp(OP_D(*a)) < 4)
+                    return true;
+                if (a->cmd == IrCmd::BUILD_VEC)
+                    return isKnownSafeFloat(OP_D(*a));
+            }
+        }
+
+        return false;
+    }
+
+    bool isKnownZeroWVector(IrOp op)
+    {
+        if (RegisterInfo* info = tryGetRegisterInfo(op))
+            return info->zeroWVector;
+
+        if (IrInst* a = function.asInstOp(op); a && a->cmd == IrCmd::BUILD_VEC)
+        {
+            if (std::optional<double> w = function.asDoubleOp(OP_D(*a)))
+                return isPositiveZeroFloatConst(*w);
+        }
+
+        return false;
+    }
+
+    void markInlineVector(IrOp op)
+    {
+        if (RegisterInfo* info = tryGetRegisterInfo(op))
+            info->inlineVector = true;
+
+        if (op.kind == IrOpKind::Inst)
+        {
+            instInlineVector.insert(op.index);
+            if (IrInst* a = function.asInstOp(op))
+            {
+                if (a->cmd == IrCmd::LOAD_TAG || a->cmd == IrCmd::LOAD_TVALUE)
+                {
+                    if (RegisterInfo* info = tryGetRegisterInfo(OP_A(*a)))
+                        info->inlineVector = true;
+                }
+            }
+        }
+    }
+
+    void markInlineVectorInst(uint32_t instIdx)
+    {
+        instInlineVector.insert(instIdx);
+    }
+
+    void markZeroWVector(IrOp op, bool zeroW)
+    {
+        markInlineVector(op);
+        if (RegisterInfo* info = tryGetRegisterInfo(op))
+            info->zeroWVector = zeroW;
+    }
+
+    bool isEscapedVectorConstLoadTag(IrOp op)
+    {
+        if (IrInst* lhs = function.asInstOp(op); lhs && lhs->cmd == IrCmd::LOAD_TAG && OP_A(*lhs).kind == IrOpKind::VmConst && function.proto)
+        {
+            const TValue* tv = &function.proto->k[vmConstOp(OP_A(*lhs))];
+            return ttisvector(tv) && !luauIsInlineVector(tv);
+        }
+
+        return false;
+    }
+
+    bool needsVectorGcBarrier(uint8_t tag, IrOp op)
+    {
+        return isMaybeGCO(tag) && !(tag == LUA_TVECTOR && isKnownInlineVector(op));
+    }
+
+    void clearInlineVectors()
+    {
+        instInlineVector.clear();
+        instSafeFloat.clear();
+    }
+#else
+    bool isKnownInlineVector(IrOp)
+    {
+        return true;
+    }
+
+    bool isKnownZeroWVector(IrOp)
+    {
+        return true;
+    }
+
+    void markInlineVector(IrOp) {}
+    void markInlineVectorInst(uint32_t) {}
+    void markZeroWVector(IrOp, bool) {}
+
+    bool isEscapedVectorConstLoadTag(IrOp)
+    {
+        return false;
+    }
+
+    bool needsVectorGcBarrier(uint8_t tag, IrOp)
+    {
+        return isGCO(tag);
+    }
+
+    void clearInlineVectors() {}
+#endif
 
     IrOp tryGetValue(IrOp op)
     {
@@ -228,6 +407,7 @@ struct ConstPropState
         if (invalidateTag)
         {
             reg.tag = 0xff;
+            reg.clearVectorFlags();
         }
 
         if (invalidateValue)
@@ -722,6 +902,14 @@ struct ConstPropState
                 argOp = OP_C(store);
             else if (offset == 8)
                 argOp = OP_D(store);
+#if LUA_T16_NANTAG_VEC4
+            else if (offset == 12 && HAS_OP_E(store))
+            {
+                if (OP_E(store).kind == IrOpKind::Constant && function.constOp(OP_E(store)).kind == IrConstKind::Tag)
+                    return function.tagOp(OP_E(store)) == LUA_TVECTOR ? build.constDouble(0.0) : IrOp{};
+                argOp = OP_E(store);
+            }
+#endif
 
             if (IrInst* arg = function.asInstOp(argOp))
             {
@@ -1414,6 +1602,7 @@ struct ConstPropState
 
         instTag.clear();
         instValue.clear();
+        clearInlineVectors();
 
         loadEnvIdx = kInvalidInstIdx;
 
@@ -1450,6 +1639,10 @@ struct ConstPropState
     // Stored the tag of a TValue stored in an instruction and will never change
     DenseHashMap<uint32_t, uint8_t> instTag;
     DenseHashMap<uint32_t, IrOp> instValue;
+#if LUA_T16_NANTAG_VEC4
+    DenseHashSet<uint32_t> instInlineVector;
+    DenseHashSet<uint32_t> instSafeFloat;
+#endif
 
     DenseHashMap<IrInst, uint32_t, IrInstHash, IrInstEq> valueMap;
 
@@ -1624,7 +1817,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::LOAD_TAG:
         if (uint8_t tag = state.tryGetTag(OP_A(inst)); tag != 0xff)
         {
-            substitute(function, inst, build.constTag(tag));
+            if (tag != LUA_TVECTOR || state.isKnownInlineVector(OP_A(inst)))
+                substitute(function, inst, build.constTag(tag));
         }
         else if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -1742,6 +1936,13 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                     }
                 }
 
+                if (value.cmd == IrCmd::BUILD_VEC)
+                {
+                    CODEGEN_ASSERT(component < value.ops.size());
+                    substitute(function, inst, value.ops[component]);
+                    break;
+                }
+
                 replace(function, block, index, IrInst{IrCmd::EXTRACT_VEC, {IrOp{IrOpKind::Inst, prevIdx}, build.constInt(component)}});
 
                 state.substituteOrRecord(inst, index);
@@ -1853,7 +2054,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 // Register in this optimization cannot be captured to avoid complications in lowering (IrValueLocationTracking doesn't model it)
                 std::tie(activeLoadCmd, activeLoadValue) = state.getPreviousVersionedLoadForTag(value, source);
 
-                if (state.tryGetTag(source) == value)
+                if (state.tryGetTag(source) == value && (value != LUA_TVECTOR || state.isKnownZeroWVector(source)))
                 {
                     if (FFlag::LuauCodegenMarkUsed)
                         state.killStore(block, inst);
@@ -1863,6 +2064,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 else
                 {
                     state.saveTag(source, value);
+                    if (value == LUA_TVECTOR)
+                        state.markZeroWVector(source, true);
 
                     // Storing 'nil' implicitly kills the known value in the register
                     // This is required for dead store elimination to correctly establish tag+value pairs as it treats 'nil' write as a full TValue
@@ -1985,6 +2188,25 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     case IrCmd::STORE_VECTOR:
         state.invalidateValue(OP_A(inst));
+#if LUA_T16_NANTAG_VEC4
+        if (HAS_OP_E(inst))
+        {
+            bool isTag = OP_E(inst).kind == IrOpKind::Constant && function.constOp(OP_E(inst)).kind == IrConstKind::Tag;
+            if (!isTag || function.tagOp(OP_E(inst)) == LUA_TVECTOR)
+            {
+                state.saveTag(OP_A(inst), LUA_TVECTOR);
+                if (isTag || state.isKnownSafeFloat(OP_E(inst)))
+                {
+                    std::optional<double> wconst = function.asDoubleOp(OP_E(inst));
+                    state.markZeroWVector(OP_A(inst), isTag || (wconst && ConstPropState::isPositiveZeroFloatConst(*wconst)));
+                }
+            }
+            else
+            {
+                state.saveTag(OP_A(inst), function.tagOp(OP_E(inst)));
+            }
+        }
+#endif
 
         // To avoid captured register invalidation tracking in lowering later, values from loads from captured registers are not propagated
         if (!function.cfg.captured.regs.test(vmRegOp(OP_A(inst))))
@@ -2031,7 +2253,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (OP_A(inst).kind == IrOpKind::VmReg)
             {
                 if (tag != 0xff)
+                {
                     state.saveTag(OP_A(inst), tag);
+                    if (tag == LUA_TVECTOR && state.isKnownInlineVector(OP_B(inst)))
+                        state.markZeroWVector(OP_A(inst), state.isKnownZeroWVector(OP_B(inst)));
+                }
 
                 if (value.kind != IrOpKind::None)
                     state.saveValue(OP_A(inst), value);
@@ -2062,8 +2288,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (tag == LUA_TBOOLEAN &&
                 (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TNUMBER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
+            else if (
+                tag == LUA_TNUMBER &&
+                (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double))
+            )
                 canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
@@ -2268,6 +2496,37 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             replace(function, OP_C(inst), build.constTag(tag));
         }
         break;
+    case IrCmd::CHECK_INLINE_VEC:
+    {
+#if LUA_T16_NANTAG_VEC4
+        if (OP_A(inst).kind == IrOpKind::Constant)
+        {
+            if (ConstPropState::isSafeInlineFloatConst(function.doubleOp(OP_A(inst))))
+                kill(function, inst);
+            else
+                replace(function, block, index, {IrCmd::JUMP, {OP_C(inst)}});
+        }
+        else if (OP_A(inst).kind == IrOpKind::Inst)
+        {
+            int lane = function.intOp(OP_B(inst));
+            if (lane == 3)
+            {
+                if (state.isKnownInlineVector(OP_A(inst)))
+                    kill(function, inst);
+                else
+                    state.instInlineVector.insert(OP_A(inst).index);
+            }
+            else if (lane == 0)
+            {
+                if (state.isKnownSafeFloat(OP_A(inst)))
+                    kill(function, inst);
+                else
+                    state.instSafeFloat.insert(OP_A(inst).index);
+            }
+        }
+#endif
+        break;
+    }
     case IrCmd::CHECK_TAG:
     {
         uint8_t b = function.tagOp(OP_B(inst));
@@ -2286,6 +2545,23 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         {
             if (tag == b)
             {
+                if (b == LUA_TVECTOR && !state.isKnownInlineVector(OP_A(inst)))
+                {
+                    // Escaped vector constant always fails inline vector guard; otherwise keep the guard and mark inline on fallthrough
+                    if (state.isEscapedVectorConstLoadTag(OP_A(inst)))
+                    {
+                        replace(function, block, index, {IrCmd::JUMP, {OP_C(inst)}});
+                        break;
+                    }
+
+                    state.markInlineVector(OP_A(inst));
+                    if (IrInst* lhs = function.asInstOp(OP_A(inst)); lhs && lhs->cmd == IrCmd::LOAD_TAG && OP_A(*lhs).kind == IrOpKind::VmReg)
+                    {
+                        if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(*lhs)))
+                            state.markInlineVectorInst(*prevIdx);
+                    }
+                    break;
+                }
                 if (FFlag::DebugLuauAbortingChecks)
                     replace(function, OP_C(inst), build.undef());
                 else
@@ -2305,10 +2581,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (lhs.cmd == IrCmd::LOAD_TAG && OP_A(lhs).kind == IrOpKind::VmReg)
             {
                 if (uint32_t* prevIdx = state.getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(lhs)))
+                {
                     state.instTag[*prevIdx] = b;
+                    if (b == LUA_TVECTOR)
+                        state.markInlineVectorInst(*prevIdx);
+                }
             }
 
             state.updateTag(OP_A(inst), b); // We can assume the tag value going forward
+            if (b == LUA_TVECTOR)
+                state.markInlineVector(OP_A(inst));
         }
         break;
     }
@@ -2530,7 +2812,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::BUFFER_WRITEVECTOR:
         CODEGEN_ASSERT(OP_E(inst).kind == IrOpKind::Constant);
         state.invalidateBufferRange(
-            inst, uint8_t(function.intOp(OP_E(inst)) * sizeof(float)), function.tagOp(OP_D(inst)), function.asIntOp(OP_B(inst)));
+            inst, uint8_t(function.intOp(OP_E(inst)) * sizeof(float)), function.tagOp(OP_D(inst)), function.asIntOp(OP_B(inst))
+        );
         break;
     case IrCmd::BUFFER_READF32X4:
         state.substituteOrRecordBufferLoad(block, index, inst, 16);
@@ -2559,9 +2842,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (uint8_t tag = state.tryGetTag(OP_B(inst)); tag != 0xff)
             {
                 // If the written object is not collectable, barrier is not required
-                if (!isGCO(tag))
+                if (!state.needsVectorGcBarrier(tag, OP_B(inst)))
                     kill(function, inst);
-                else
+                else if (isGCO(tag))
                     replace(function, OP_C(inst), build.constTag(tag));
             }
         }
@@ -2736,9 +3019,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SELECT_INT64:
     case IrCmd::SELECT_VEC:
     case IrCmd::MULADD_VEC:
-    case IrCmd::EXTRACT_VEC:
     case IrCmd::NOT_ANY:
         state.substituteOrRecord(inst, index);
+        break;
+    case IrCmd::EXTRACT_VEC:
+        if (IrInst* source = function.asInstOp(OP_A(inst)); source && source->cmd == IrCmd::BUILD_VEC)
+        {
+            unsigned component = unsigned(function.intOp(OP_B(inst)));
+            CODEGEN_ASSERT(component < source->ops.size());
+            substitute(function, inst, source->ops[component]);
+        }
+        else
+        {
+            state.substituteOrRecord(inst, index);
+        }
         break;
     case IrCmd::ADD_FLOAT:
     case IrCmd::SUB_FLOAT:
@@ -3236,6 +3530,15 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
     case IrCmd::FLOAT_TO_VEC:
     case IrCmd::TAG_VECTOR:
+        state.substituteOrRecord(inst, index);
+        break;
+
+    case IrCmd::BUILD_VEC:
+        for (IrOp& component : inst.ops)
+        {
+            if (std::optional<double> value = function.asDoubleOp(component))
+                replace(function, component, build.constDouble(float(*value)));
+        }
         state.substituteOrRecord(inst, index);
         break;
 

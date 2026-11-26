@@ -628,8 +628,8 @@ struct RemoveDeadStoreState
 
             if (regInfo.maybeGco)
             {
-                // If we happen to know the exact tag, it has to be a GCO, otherwise 'maybeGCO' should be false
-                CODEGEN_ASSERT(regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag));
+                // If we happen to know the exact tag, it has to be a (maybe-)GCO, otherwise 'maybeGCO' should be false
+                CODEGEN_ASSERT(regInfo.knownTag == kUnknownTag || isMaybeGCO(regInfo.knownTag));
 
                 // If the values stored are still used and might be a GCO object, we have to pin in to the stack
                 // And we have to pin all components of the register containing GCO
@@ -713,7 +713,7 @@ static bool tryReplaceTagWithFullStore(
         state.killTagAndValueStorePair(regInfo);
 
         regInfo.tvalueInstIdx = instIndex;
-        regInfo.maybeGco = isGCO(tag);
+        regInfo.maybeGco = isMaybeGCO(tag);
         regInfo.knownTag = tag;
         regInfo.tagSourceInstIdx = ~0u;
         state.hasGcoToClear |= regInfo.maybeGco;
@@ -740,7 +740,7 @@ static bool tryReplaceTagWithFullStore(
             state.killTValueStore(regInfo);
 
             regInfo.tvalueInstIdx = instIndex;
-            regInfo.maybeGco = isGCO(tag);
+            regInfo.maybeGco = isMaybeGCO(tag);
             regInfo.knownTag = tag;
             regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
@@ -761,7 +761,7 @@ static bool tryReplaceTagWithFullStore(
             state.killTValueStore(regInfo);
 
             regInfo.tvalueInstIdx = instIndex;
-            regInfo.maybeGco = isGCO(tag);
+            regInfo.maybeGco = isMaybeGCO(tag);
             regInfo.knownTag = tag;
             regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
@@ -770,6 +770,20 @@ static bool tryReplaceTagWithFullStore(
     }
 
     return false;
+}
+
+static IrOp getStoreVectorTagOp(IrBuilder& build, IrFunction& function, IrInst& prev)
+{
+    IrOp prevTagOp = OP_E(prev);
+    CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
+#if LUA_T16_NANTAG_VEC4
+    if (!(prevTagOp.kind == IrOpKind::Constant && function.constOp(prevTagOp).kind == IrConstKind::Tag))
+        prevTagOp = build.constTag(LUA_TVECTOR);
+#else
+    (void)build;
+    (void)function;
+#endif
+    return prevTagOp;
 }
 
 static bool tryReplaceValueWithFullStore(
@@ -820,8 +834,7 @@ static bool tryReplaceValueWithFullStore(
         }
         else if (prev.cmd == IrCmd::STORE_VECTOR)
         {
-            IrOp prevTagOp = OP_E(prev);
-            CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
+            IrOp prevTagOp = getStoreVectorTagOp(build, function, prev);
             uint8_t prevTag = function.tagOp(prevTagOp);
 
             CODEGEN_ASSERT(regInfo.knownTag == prevTag);
@@ -909,8 +922,7 @@ static bool tryReplaceVectorValueWithFullStore(
         }
         else if (prev.cmd == IrCmd::STORE_VECTOR)
         {
-            IrOp prevTagOp = OP_E(prev);
-            CODEGEN_ASSERT(prevTagOp.kind != IrOpKind::None);
+            IrOp prevTagOp = getStoreVectorTagOp(build, function, prev);
             uint8_t prevTag = function.tagOp(prevTagOp);
 
             CODEGEN_ASSERT(regInfo.knownTag == prevTag);
@@ -992,7 +1004,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
                 regInfo.tvalueInstIdx = kInvalidInstIdx;
             }
 
-            regInfo.maybeGco = isGCO(tag);
+            regInfo.maybeGco = isMaybeGCO(tag);
             regInfo.knownTag = tag;
             regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
@@ -1087,6 +1099,22 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.ignoreAtExit = false;
 
+#if LUA_T16_NANTAG_VEC4
+            if (HAS_OP_E(inst))
+            {
+                state.killTagAndValueStorePair(regInfo);
+                state.killTValueStore(regInfo);
+
+                regInfo.tagInstIdx = kInvalidInstIdx;
+                regInfo.valueInstIdx = kInvalidInstIdx;
+                regInfo.tvalueInstIdx = index;
+                regInfo.knownTag = LUA_TVECTOR;
+                regInfo.tagSourceInstIdx = kInvalidInstIdx;
+                regInfo.maybeGco = false;
+                break;
+            }
+#endif
+
             if (tryReplaceVectorValueWithFullStore(state, build, function, block, index, regInfo))
                 break;
 
@@ -1124,7 +1152,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.knownTag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
             regInfo.tagSourceInstIdx = ~0u;
-            regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag);
+            regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isMaybeGCO(regInfo.knownTag);
 
             state.hasGcoToClear |= regInfo.maybeGco;
         }
@@ -1148,7 +1176,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.valueInstIdx = kInvalidInstIdx;
 
             regInfo.tvalueInstIdx = index;
-            regInfo.maybeGco = isGCO(function.tagOp(OP_B(inst)));
+            regInfo.maybeGco = isMaybeGCO(function.tagOp(OP_B(inst)));
             regInfo.knownTag = function.tagOp(OP_B(inst));
             regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
@@ -1156,6 +1184,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
         break;
 
         // Guard checks can jump to a block which might be using some or all the values we stored
+    case IrCmd::CHECK_INLINE_VEC:
+        state.checkLiveIns(OP_C(inst), index, true);
+        break;
     case IrCmd::CHECK_TAG:
         state.checkLiveIns(OP_C(inst), index, true);
 
@@ -1767,6 +1798,7 @@ void markDeadStoresInBlockChains(IrBuilder& build)
     }
 
     generateVmExitBlocks(build, recordedVmExitSyncs);
+
 }
 
 } // namespace CodeGen

@@ -536,6 +536,13 @@ enum class IrCmd : uint8_t
     // A: float
     FLOAT_TO_VEC,
 
+    // Packs four float components into a vector TValue register (LUA_T16_NANTAG_VEC4)
+    // A: float
+    // B: float
+    // C: float
+    // D: float
+    BUILD_VEC,
+
     // Adds VECTOR type tag to a vector, preserving X/Y/Z components
     // A: TValue
     TAG_VECTOR,
@@ -543,6 +550,12 @@ enum class IrCmd : uint8_t
     // Clear the fourth lane to be zero, preserving X/Y/Z components
     // A: TValue (vector)
     UNTAG_VECTOR,
+
+    // Guard that a float4 vector lane (or scalar float) does not collide with NaN-tag range [0xffffffe0..0xffffffff]
+    // A: TValue (vector) or float
+    // B: int (lane index: 3 for TValue vector w, 0 for scalar float)
+    // C: block/vmexit/undef
+    CHECK_INLINE_VEC,
 
     // Clear high register bits of an unsigned integer register. Used to sanitize value of 'producesDirtyHighRegisterBits' instructions.
     // A: uint

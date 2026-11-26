@@ -756,6 +756,8 @@ void AssemblyBuilderA64::fmov(RegisterA64 dst, RegisterA64 src)
         placeR1("fmov", dst, src, 0b00'11110'00'1'0000'00'10000);
     else if (dst.kind == KindA64::s && src.kind == KindA64::w)
         placeR1("fmov", dst, src, 0b00'11110'00'1'00'111'000000);
+    else if (dst.kind == KindA64::w && src.kind == KindA64::s)
+        placeR1("fmov", dst, src, 0b00'11110'00'1'00'110'000000);
     else
         CODEGEN_ASSERT(!"Unsupported fmov kind");
 }
@@ -1071,6 +1073,34 @@ void AssemblyBuilderA64::umov_4s(RegisterA64 dst, RegisterA64 src, uint8_t index
 
     place(dst.index | (src.index << 5) | op | (index << 19));
 
+    commit();
+}
+
+void AssemblyBuilderA64::zip1_4s(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2)
+{
+    CODEGEN_ASSERT(dst.kind == KindA64::q && src1.kind == KindA64::q && src2.kind == KindA64::q);
+
+    if (logText)
+        logAppend(" %-12sv%d.4s,v%d.4s,v%d.4s\n", "zip1", dst.index, src1.index, src2.index);
+
+    //                Q     A-SIMD Sz   Rm    Opcode Rn    Rd
+    uint32_t op = 0b0'1'0'01110'10'0'00000'001110'00000'00000;
+
+    place(dst.index | (src1.index << 5) | (src2.index << 16) | op);
+    commit();
+}
+
+void AssemblyBuilderA64::zip1_2d(RegisterA64 dst, RegisterA64 src1, RegisterA64 src2)
+{
+    CODEGEN_ASSERT(dst.kind == KindA64::q && src1.kind == KindA64::q && src2.kind == KindA64::q);
+
+    if (logText)
+        logAppend(" %-12sv%d.2d,v%d.2d,v%d.2d\n", "zip1", dst.index, src1.index, src2.index);
+
+    //                Q     A-SIMD Sz   Rm    Opcode Rn    Rd
+    uint32_t op = 0b0'1'0'01110'11'0'00000'001110'00000'00000;
+
+    place(dst.index | (src1.index << 5) | (src2.index << 16) | op);
     commit();
 }
 

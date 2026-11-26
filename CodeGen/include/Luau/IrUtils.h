@@ -61,6 +61,7 @@ inline bool isNonTerminatingJump(IrCmd cmd)
     case IrCmd::TRY_NUM_TO_INDEX:
     case IrCmd::TRY_CALL_FASTGETTM:
     case IrCmd::CHECK_FASTCALL_RES:
+    case IrCmd::CHECK_INLINE_VEC:
     case IrCmd::CHECK_TAG:
     case IrCmd::CHECK_TRUTHY:
     case IrCmd::CHECK_READONLY:
@@ -206,6 +207,7 @@ bool anyArgumentMatch(IrInst& inst, F&& func)
 }
 
 bool isGCO(uint8_t tag);
+bool isMaybeGCO(uint8_t tag);
 
 // Optional bit has to be cleared at call site, otherwise, this will return 'false' for 'userdata?'
 bool isUserdataBytecodeType(uint8_t ty);

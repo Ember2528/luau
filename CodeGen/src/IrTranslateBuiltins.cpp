@@ -1,5 +1,6 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "IrTranslateBuiltins.h"
+#include "IrTranslation.h"
 
 #include "Luau/Bytecode.h"
 #include "Luau/IrBuilder.h"
@@ -35,6 +36,15 @@ static IrOp builtinLoadDouble(IrBuilder& build, IrOp arg)
         return arg;
 
     return build.inst(IrCmd::LOAD_DOUBLE, arg);
+}
+
+static IrOp emitVectorDot(IrBuilder& build, IrOp a, IrOp b)
+{
+#if LUA_T16_NANTAG_VEC4
+    return build.inst(IrCmd::DOT_VEC, a, b, build.constInt(4));
+#else
+    return FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, b, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, b);
+#endif
 }
 
 // Wrapper code for all builtins with a fixed signature and manual assembly lowering of the body
@@ -336,7 +346,7 @@ static BuiltinImplResult translateBuiltinVectorLerp(IrBuilder& build, int nparam
 
         IrOp res = build.inst(IrCmd::MULADD_VEC, diff, tvec, a);
         IrOp ret = build.inst(IrCmd::SELECT_VEC, res, b, tvec, one);
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        emitStoreVectorTValue(build, ra, ret, pcpos);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -792,12 +802,24 @@ static BuiltinImplResult translateBuiltinBit32Replace(IrBuilder& build, int npar
     return {BuiltinImplType::Full, 1};
 }
 
+#if LUA_T16_NANTAG_VEC4
+static void emitBuildAndStoreVector(IrBuilder& build, int ra, IrOp x, IrOp y, IrOp z, IrOp w, int pcpos, bool checkW)
+{
+    if (checkW)
+        build.inst(IrCmd::CHECK_INLINE_VEC, w, build.constInt(0), build.vmExit(pcpos));
+    IrOp vec = build.inst(IrCmd::BUILD_VEC, x, y, z, w);
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), vec);
+}
+#endif
+
 static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, int ra, int arg, IrOp args, IrOp arg3, int nresults, int pcpos)
 {
     if (nparams < 2 || nresults > 1)
         return {BuiltinImplType::None, -1};
 
+#if !LUA_T16_NANTAG_VEC4
     CODEGEN_ASSERT(LUA_VECTOR_SIZE == 3);
+#endif
 
     if (nparams == 2)
     {
@@ -816,9 +838,33 @@ static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, i
             IrOp xf = build.inst(IrCmd::NUM_TO_FLOAT, x);
             IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
 
+#if LUA_T16_NANTAG_VEC4
+            emitBuildAndStoreVector(build, ra, xf, yf, build.constDouble(0.0), build.constDouble(0.0), pcpos, /* checkW= */ false);
+            return {BuiltinImplType::Full, 1};
+#else
             build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, build.constDouble(0.0));
+#endif
         }
     }
+#if LUA_T16_NANTAG_VEC4
+    else if (nparams >= 4)
+    {
+        // FASTCALL only customizes the first three operands; the fourth uses a contiguous argument register.
+        IrOp arg4 = build.vmReg(arg + 3);
+        builtinCheckDouble(build, build.vmReg(arg), pcpos);
+        builtinCheckDouble(build, args, pcpos);
+        builtinCheckDouble(build, arg3, pcpos);
+        builtinCheckDouble(build, arg4, pcpos);
+
+        IrOp xf = build.inst(IrCmd::NUM_TO_FLOAT, builtinLoadDouble(build, build.vmReg(arg)));
+        IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, builtinLoadDouble(build, args));
+        IrOp zf = build.inst(IrCmd::NUM_TO_FLOAT, builtinLoadDouble(build, arg3));
+        IrOp wf = build.inst(IrCmd::NUM_TO_FLOAT, builtinLoadDouble(build, arg4));
+
+        emitBuildAndStoreVector(build, ra, xf, yf, zf, wf, pcpos, /* checkW= */ true);
+        return {BuiltinImplType::Full, 1};
+    }
+#endif
     else
     {
         builtinCheckDouble(build, build.vmReg(arg), pcpos);
@@ -840,7 +886,12 @@ static BuiltinImplResult translateBuiltinVector(IrBuilder& build, int nparams, i
             IrOp yf = build.inst(IrCmd::NUM_TO_FLOAT, y);
             IrOp zf = build.inst(IrCmd::NUM_TO_FLOAT, z);
 
+#if LUA_T16_NANTAG_VEC4
+            emitBuildAndStoreVector(build, ra, xf, yf, zf, build.constDouble(0.0), pcpos, /* checkW= */ false);
+            return {BuiltinImplType::Full, 1};
+#else
             build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xf, yf, zf);
+#endif
         }
     }
 
@@ -1008,20 +1059,29 @@ static BuiltinImplResult translateBuiltinBufferReadVector(
         // vector components are stored as doubles; there is no single wide move, so read each f32 lane and widen
         IrOp xd = build.inst(IrCmd::FLOAT_TO_NUM, build.inst(IrCmd::BUFFER_READF32, buf, intIndex, build.constTag(LUA_TBUFFER)));
         IrOp yd = build.inst(
-            IrCmd::FLOAT_TO_NUM, build.inst(IrCmd::BUFFER_READF32, buf, build.inst(IrCmd::ADD_INT, intIndex, build.constInt(4)), build.constTag(LUA_TBUFFER))
+            IrCmd::FLOAT_TO_NUM,
+            build.inst(IrCmd::BUFFER_READF32, buf, build.inst(IrCmd::ADD_INT, intIndex, build.constInt(4)), build.constTag(LUA_TBUFFER))
         );
-        IrOp zd = count >= 3 ? build.inst(
-                                   IrCmd::FLOAT_TO_NUM,
-                                   build.inst(IrCmd::BUFFER_READF32, buf, build.inst(IrCmd::ADD_INT, intIndex, build.constInt(8)), build.constTag(LUA_TBUFFER))
-                               )
-                             : build.constDouble(0.0);
+        IrOp zd =
+            count >= 3
+                ? build.inst(
+                      IrCmd::FLOAT_TO_NUM,
+                      build.inst(IrCmd::BUFFER_READF32, buf, build.inst(IrCmd::ADD_INT, intIndex, build.constInt(8)), build.constTag(LUA_TBUFFER))
+                  )
+                : build.constDouble(0.0);
         build.inst(IrCmd::STORE_POINTER, build.vmReg(ra), build.inst(IrCmd::NEW_VECTOR, xd, yd, zd));
         build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
     }
     else
     {
         IrOp vec = build.inst(IrCmd::BUFFER_READVECTOR, buf, intIndex, build.constTag(LUA_TBUFFER), build.constInt(count));
+#if LUA_T16_NANTAG_VEC4
+        if (count == 4)
+            build.inst(IrCmd::CHECK_INLINE_VEC, vec, build.constInt(3), build.vmExit(pcpos));
+        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), vec);
+#else
         build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, vec));
+#endif
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1114,7 +1174,7 @@ static BuiltinImplResult translateBuiltinVectorMagnitude(
     {
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
 
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, a);
+        IrOp sum = emitVectorDot(build, a, a);
         IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
 
         mag = build.inst(IrCmd::FLOAT_TO_NUM, mag);
@@ -1169,7 +1229,7 @@ static BuiltinImplResult translateBuiltinVectorNormalize(
     else
     {
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, a, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, a);
+        IrOp sum = emitVectorDot(build, a, a);
 
         IrOp mag = build.inst(IrCmd::SQRT_FLOAT, sum);
         IrOp inv = build.inst(IrCmd::DIV_FLOAT, build.constDouble(1.0f), mag);
@@ -1177,9 +1237,7 @@ static BuiltinImplResult translateBuiltinVectorNormalize(
 
         IrOp result = build.inst(IrCmd::MUL_VEC, a, invvec);
 
-        result = build.inst(IrCmd::TAG_VECTOR, result);
-
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), result);
+        emitStoreVectorTValue(build, ra, result, pcpos);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1246,7 +1304,12 @@ static BuiltinImplResult translateBuiltinVectorCross(IrBuilder& build, int npara
         IrOp y1x2 = build.inst(IrCmd::MUL_FLOAT, y1, x2);
         IrOp zr = build.inst(IrCmd::SUB_FLOAT, x1y2, y1x2);
 
+#if LUA_T16_NANTAG_VEC4
+        emitBuildAndStoreVector(build, ra, xr, yr, zr, build.constDouble(0.0), pcpos, /* checkW= */ false);
+        return {BuiltinImplType::Full, 1};
+#else
         build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+#endif
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1290,7 +1353,7 @@ static BuiltinImplResult translateBuiltinVectorDot(IrBuilder& build, int nparams
         IrOp a = build.inst(IrCmd::LOAD_TVALUE, arg1, build.constInt(0));
         IrOp b = build.inst(IrCmd::LOAD_TVALUE, args, build.constInt(0));
 
-        IrOp sum = FFlag::LuauCodegenMultiLaneDot ? build.inst(IrCmd::DOT_VEC, a, b, build.constInt(3)) : build.inst(IrCmd::DOT_VEC, a, b);
+        IrOp sum = emitVectorDot(build, a, b);
 
         sum = build.inst(IrCmd::FLOAT_TO_NUM, sum);
 
@@ -1339,7 +1402,7 @@ static BuiltinImplResult translateBuiltinVectorMap1x4(
         IrOp value = build.inst(IrCmd::LOAD_TVALUE, arg1);
         IrOp ret = build.inst(cmd, value);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        emitStoreVectorTValue(build, ra, ret, pcpos);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1387,7 +1450,14 @@ static BuiltinImplResult translateBuiltinVectorMap1(
         IrOp yr = build.inst(cmd, y1);
         IrOp zr = build.inst(cmd, z1);
 
+#if LUA_T16_NANTAG_VEC4
+        IrOp w1 = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(12));
+        IrOp wr = build.inst(cmd, w1);
+        emitBuildAndStoreVector(build, ra, xr, yr, zr, wr, pcpos, /* checkW= */ true);
+        return {BuiltinImplType::Full, 1};
+#else
         build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xr, yr, zr);
+#endif
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1487,6 +1557,17 @@ static BuiltinImplResult translateBuiltinVectorClamp(
 
         build.beginBlock(block3);
 
+#if LUA_T16_NANTAG_VEC4
+        IrOp block4 = build.block(IrBlockKind::Internal);
+        IrOp w = build.inst(IrCmd::LOAD_FLOAT, arg1, build.constInt(12));
+        IrOp wmin = build.inst(IrCmd::LOAD_FLOAT, args, build.constInt(12));
+        IrOp wmax = build.inst(IrCmd::LOAD_FLOAT, arg3, build.constInt(12));
+
+        build.inst(IrCmd::JUMP_CMP_FLOAT, wmin, wmax, build.cond(IrCondition::NotLessEqual), fallback, block4);
+
+        build.beginBlock(block4);
+#endif
+
         IrOp xtemp = build.inst(IrCmd::MAX_FLOAT, xmin, x);
         IrOp xclamped = build.inst(IrCmd::MIN_FLOAT, xmax, xtemp);
 
@@ -1496,7 +1577,14 @@ static BuiltinImplResult translateBuiltinVectorClamp(
         IrOp ztemp = build.inst(IrCmd::MAX_FLOAT, zmin, z);
         IrOp zclamped = build.inst(IrCmd::MIN_FLOAT, zmax, ztemp);
 
+#if LUA_T16_NANTAG_VEC4
+        IrOp wtemp = build.inst(IrCmd::MAX_FLOAT, wmin, w);
+        IrOp wclamped = build.inst(IrCmd::MIN_FLOAT, wmax, wtemp);
+        emitBuildAndStoreVector(build, ra, xclamped, yclamped, zclamped, wclamped, pcpos, /* checkW= */ true);
+        return {BuiltinImplType::UsesFallback, 1};
+#else
         build.inst(IrCmd::STORE_VECTOR, build.vmReg(ra), xclamped, yclamped, zclamped);
+#endif
     }
 
     build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TVECTOR));
@@ -1552,7 +1640,7 @@ static BuiltinImplResult translateBuiltinVectorMinMax(
         // Swapped arguments are required for consistency with VM builtins
         IrOp ret = build.inst(cmd, value2, value1);
 
-        build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::TAG_VECTOR, ret));
+        emitStoreVectorTValue(build, ra, ret, pcpos);
     }
 
     return {BuiltinImplType::Full, 1};
@@ -1695,10 +1783,18 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinBufferReadVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 2);
     case LBF_BUFFER_READVECTORF32X3:
         return translateBuiltinBufferReadVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 3);
+#if LUA_T16_NANTAG_VEC4
+    case LBF_BUFFER_READVECTORF32X4:
+        return translateBuiltinBufferReadVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 4);
+#endif
     case LBF_BUFFER_WRITEVECTORF32X2:
         return translateBuiltinBufferWriteVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 2);
     case LBF_BUFFER_WRITEVECTORF32X3:
         return translateBuiltinBufferWriteVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 3);
+#if LUA_T16_NANTAG_VEC4
+    case LBF_BUFFER_WRITEVECTORF32X4:
+        return translateBuiltinBufferWriteVector(build, nparams, ra, arg, args, arg3, nresults, pcpos, 4);
+#endif
     case LBF_VECTOR_MAGNITUDE:
         return translateBuiltinVectorMagnitude(build, nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_NORMALIZE:

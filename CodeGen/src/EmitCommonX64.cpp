@@ -246,18 +246,25 @@ void checkObjectBarrierConditions(AssemblyBuilderX64& build, RegisterX64 tmp, Re
     if (ratag == -1 || !isGCO(ratag))
     {
         // iscollectable(ra)
+#if LUA_T16_NANTAG_VEC4
+        constexpr int32_t kCollectableMin = int32_t(kNaNTagCollectableMin);
+        constexpr ConditionX64 kSkipCond = ConditionX64::Below;
+#else
+        constexpr int32_t kCollectableMin = LUA_TSTRING;
+        constexpr ConditionX64 kSkipCond = ConditionX64::Less;
+#endif
         if (raOp.kind == IrOpKind::Inst)
         {
             build.vpextrd(dwordReg(tmp), ra, 3);
-            build.cmp(dwordReg(tmp), LUA_TSTRING);
+            build.cmp(dwordReg(tmp), kCollectableMin);
         }
         else
         {
             OperandX64 tag = (raOp.kind == IrOpKind::VmReg) ? luauRegTag(vmRegOp(raOp)) : luauConstantTag(vmConstOp(raOp));
-            build.cmp(tag, LUA_TSTRING);
+            build.cmp(tag, kCollectableMin);
         }
 
-        build.jcc(ConditionX64::Less, skip);
+        build.jcc(kSkipCond, skip);
     }
 
     // isblack(obj2gco(o))
@@ -461,7 +468,7 @@ void emitReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers)
     build.jcc(ConditionX64::GreaterEqual, skipResultCopy);
 
     Label repeatNilLoop = build.setLabel();
-    build.mov(dword[res + offsetof(TValue, tt)], LUA_TNIL);
+    build.mov(dword[res + offsetof(TValue, tt)], encodeTagImm(LUA_TNIL));
     build.add(res, sizeof(TValue));
     build.inc(counter);
     build.jcc(ConditionX64::NotZero, repeatNilLoop);
