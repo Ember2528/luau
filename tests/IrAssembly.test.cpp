@@ -3,12 +3,17 @@
 #include "Luau/IrAnalysis.h"
 #include "Luau/IrBuilder.h"
 #include "Luau/IrDump.h"
+#include "Luau/OptimizeDeadStore.h"
+
+#include "luaconf.h"
 
 #include "doctest.h"
 #include "ScopedFlags.h"
 
 #include <regex>
 
+static constexpr bool kWideTValue = LUA_VECTOR_SIZE == 4;
+LUAU_FASTFLAG(DebugCodegenLimitRegs)
 using namespace Luau::CodeGen;
 
 static void stripLinesContaining(std::string& text, const char* needle)
@@ -120,6 +125,27 @@ public:
 
 TEST_SUITE_BEGIN("IrAssembly");
 
+TEST_CASE_FIXTURE(IrAssemblyFixture, "TValueRestoreAtUnalignedVmSlot")
+{
+    options.target = AssemblyOptions::A64;
+
+    // R11's 24-byte slot is outside the unscaled load range and is not 16-byte aligned.
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    IrOp value = build.inst(IrCmd::LOAD_TVALUE, build.vmReg(11));
+    build.inst(IrCmd::INTERRUPT, build.constUint(0));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(0), value, build.constInt(0), build.constTag(tvector));
+    build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));
+    updateUseCounts(build.function);
+
+    LoweringStats stats;
+    std::string assembly = getAssemblyFromIr(build, options, &stats);
+    INFO(assembly);
+    CHECK_EQ(stats.loweringErrors, 0);
+    CHECK_EQ(stats.regAllocErrors, 0);
+    CHECK_EQ(stats.spillsToSlot, 0);
+    CHECK_GT(stats.spillsToRestore, 0);
+}
+
 TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmReg")
 {
     IrOp entry = build.block(IrBlockKind::Internal);
@@ -136,7 +162,35 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmReg")
     // %1 after INTERRUPT spill is restored from R1 using vcvttsd2si conversion
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R0, %1
+ vcvttsd2si  eax,qword ptr [r14+018h]
+ mov         dword ptr [r14],eax
+  STORE_TAG R0, tboolean
+ mov         dword ptr [r14+010h],1
+  RETURN R0, 1i
+ vmovups     xmm0,xmmword ptr [r14]
+ vmovups     xmmword ptr [r14-018h],xmm0
+ mov         r8d,dword ptr [r14+010h]
+ mov         dword ptr [r14-08h],r8d
+ mov         rdi,r14
+ mov         ecx,1
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -183,7 +237,45 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntChainedFromDoubleVmRegBoth")
     // Both %0 and %1 restore from R2, integer restore uses vcvttsd2si
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R2
+ vmovsd      xmm0,qword ptr [r14+030h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R0, %1
+ vcvttsd2si  eax,qword ptr [r14+030h]
+ mov         dword ptr [r14],eax
+  STORE_TAG R0, tboolean
+ mov         dword ptr [r14+010h],1
+  STORE_DOUBLE R1, %0
+ vmovsd      xmm0,qword ptr [r14+030h]
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  RETURN R0, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+010h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+028h],r8d
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -237,7 +329,32 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "PreserveIntWithoutChainSpillsToStack")
     // %3 is restored from a stack spill as there is no VM register store location for it
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %2 = ADD_NUM %0, R2
+ vaddsd      xmm0,xmm0,qword ptr [r14+030h]
+  %3 = NUM_TO_INT %2
+ vcvttsd2si  eax,xmm0
+  INTERRUPT 0u
+ mov         dword ptr [rsp+048h],eax
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_INT R3, %3
+ mov         eax,dword ptr [rsp+048h]
+ mov         dword ptr [r14+048h],eax
+  RETURN R0, 0i
+ lea         rdi,[r14-018h]
+ xor         ecx,ecx
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -294,7 +411,50 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintMaterializesIntIntoDeadVmReg")
     // INTERRUPT spills %5 to R4 and later we read from it
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %2
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  %5 = INT_TO_NUM %1
+ vcvtsi2sd   xmm0,xmm0,eax
+  INTERRUPT 0u
+ vmovsd      qword ptr [r14+060h],xmm0
+ mov         dword ptr [r14+070h],0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_DOUBLE R2, %5
+ vmovsd      xmm0,qword ptr [r14+060h]
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  RETURN R1, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+040h]
+ mov         dword ptr [rdi+028h],r8d
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -368,7 +528,59 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintCorruptsTagOnPartialValueKill")
     // With no established tag+value store after redundant tag store removal, there should be no DSE hint used for R1 spill
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  CHECK_TAG R1, tnumber, exit(0)
+ cmp         dword ptr [r14+028h],3
+ jne         .L12
+  CHECK_TAG R2, tnumber, exit(0)
+ cmp         dword ptr [r14+040h],3
+ jne         .L12
+  %4 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %6 = ADD_NUM %4, R2
+ vaddsd      xmm0,xmm0,qword ptr [r14+030h]
+  INTERRUPT 0u
+ vmovsd      qword ptr [rsp+048h],xmm0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L13
+.L14:
+  STORE_DOUBLE R3, %6
+ vmovsd      xmm0,qword ptr [rsp+048h]
+ vmovsd      qword ptr [r14+048h],xmm0
+  STORE_TAG R3, tnumber
+ mov         dword ptr [r14+058h],3
+  CHECK_TAG R4, tnumber, bb_exit_1
+   ; exit sync: R1, {%6}
+ cmp         dword ptr [r14+070h],3
+ jne         .L15
+  %14 = LOAD_DOUBLE R4
+ vmovsd      xmm0,qword ptr [r14+060h]
+  STORE_DOUBLE R1, %14
+ vmovsd      qword ptr [r14+018h],xmm0
+  RETURN R1, 3i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+040h]
+ mov         dword ptr [rdi+028h],r8d
+ vmovups     xmm0,xmmword ptr [r14+048h]
+ vmovups     xmmword ptr [rdi+030h],xmm0
+ mov         r8d,dword ptr [r14+058h]
+ mov         dword ptr [rdi+040h],r8d
+ add         rdi,48h
+ mov         ecx,3
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -445,7 +657,64 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "MultiNumToXSharedSourceStrandsRestore")
     // Both %1 and %2 restore from stack since R1 restore location was killed
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = NUM_TO_UINT %0
+ vcvttsd2si  rdx,xmm0
+  %3 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %3
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  INTERRUPT 0u
+ mov         dword ptr [rsp+048h],eax
+ mov         dword ptr [rsp+04Ch],edx
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  %7 = INT_TO_NUM %1
+ mov         eax,dword ptr [rsp+048h]
+ vcvtsi2sd   xmm0,xmm0,eax
+  STORE_DOUBLE R2, %7
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  %10 = UINT_TO_NUM %2
+ mov         edx,dword ptr [rsp+04Ch]
+ mov         eax,edx
+ vcvtsi2sd   xmm0,xmm0,rax
+  STORE_DOUBLE R3, %10
+ vmovsd      qword ptr [r14+048h],xmm0
+  STORE_TAG R3, tnumber
+ mov         dword ptr [r14+058h],3
+  RETURN R1, 3i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+040h]
+ mov         dword ptr [rdi+028h],r8d
+ vmovups     xmm0,xmmword ptr [r14+048h]
+ vmovups     xmmword ptr [rdi+030h],xmm0
+ mov         r8d,dword ptr [r14+058h]
+ mov         dword ptr [rdi+040h],r8d
+ add         rdi,48h
+ mov         ecx,3
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -531,7 +800,50 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintUpdateRedirectsLazyRestoreToLaterRe
     // INTERRUPT spills to R5 at [r14+050h]
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"T24(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  %2 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %2
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  %5 = INT_TO_NUM %1
+ vcvtsi2sd   xmm0,xmm0,eax
+  INTERRUPT 0u
+ vmovsd      qword ptr [r14+078h],xmm0
+ mov         dword ptr [r14+088h],0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L12
+.L13:
+  STORE_DOUBLE R2, %5
+ vmovsd      xmm0,qword ptr [r14+078h]
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  RETURN R1, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+040h]
+ mov         dword ptr [rdi+028h],r8d
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)T24"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -601,7 +913,56 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "IntStackSpillIgnoresConvertedRestoreLocati
     // 'i' spill restore must be done from stack if it was recorded as such, even when restore location info is available
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  ; %0 can be restored from R1
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  ; %1 can be restored from R1 as int
+  JUMP_IF_TRUTHY R2, bb_1, bb_2
+ cmp         dword ptr [r14+040h],0
+ je          .L12
+ cmp         dword ptr [r14+040h],1
+ jne         .L13
+ cmp         dword ptr [r14+030h],0
+ jne         .L13
+ jmp         .L12
+bb_1:
+.L13:
+  INTERRUPT 0u
+ mov         dword ptr [rsp+048h],eax
+  ; spill %1 (int eax) to slot 0
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L14
+.L15:
+  STORE_INT R0, %1
+ mov         eax,dword ptr [rsp+048h]
+  ; restore %1 (int eax) from slot 0
+ mov         dword ptr [r14],eax
+  STORE_TAG R0, tboolean
+ mov         dword ptr [r14+010h],1
+  RETURN R0, 1i
+ vmovups     xmm0,xmmword ptr [r14]
+ vmovups     xmmword ptr [r14-018h],xmm0
+ mov         r8d,dword ptr [r14+010h]
+ mov         dword ptr [r14-08h],r8d
+ mov         rdi,r14
+ mov         ecx,1
+ jmp         .L7
+bb_2:
+.L12:
+  RETURN R0, 0i
+ lea         rdi,[r14-018h]
+ xor         ecx,ecx
+ jmp         .L7
+
+)"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -691,7 +1052,36 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedRegisters")
     // Exit sync restore order is R3 {5.0}, R1 {x}, so before we store to R3, we must restore %2 (x) which is in R3
     CHECK_EQ(
         "\n" + result,
-        R"(
+        kWideTValue ? R"(
+bb_exit_1:
+.L15:
+  ; %2 can be restored from R3
+  STORE_DOUBLE R3, 5
+ vmovsd      xmm0,qword ptr [r14+048h]
+  ; restore %2 (double xmm0) from R3
+  ; %2 can no longer be restored from R3
+ vmovsd      xmm1,qword ptr [.start-8]
+ vmovsd      qword ptr [r14+048h],xmm1
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  STORE_DOUBLE R1, %2
+ vmovsd      qword ptr [r14+018h],xmm0
+  JUMP exit(0)
+ jmp         .L12
+; interrupt handlers
+.L13:
+ mov         eax,1
+ lea         rbx,.L14
+ jmp         .L5
+; exit handlers
+.L12:
+ mov         edx,0
+ jmp         .L1
+.L18:
+ ud2
+
+)"
+                     : R"(
 bb_exit_1:
 .L15:
   ; %2 can be restored from R3
@@ -770,7 +1160,44 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedDependent")
     // Before we restore R3, we need to evict %3 which has a conversion from a double number
     CHECK_EQ(
         "\n" + result,
-        R"(
+        kWideTValue ? R"(
+bb_exit_1:
+.L15:
+  ; %2 can be restored from R3
+  ; %3 can be restored from R3 as int
+  STORE_DOUBLE R3, 5
+ vmovsd      xmm0,qword ptr [r14+048h]
+  ; restore %2 (double xmm0) from R3
+  ; %2 can no longer be restored from R3
+ vcvttsd2si  eax,qword ptr [r14+048h]
+  ; restore %3 (int eax) from R3 as int
+  ; %3 can no longer be restored from R3 as int
+ vmovsd      xmm1,qword ptr [.start-8]
+ vmovsd      qword ptr [r14+048h],xmm1
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  STORE_DOUBLE R2, %2
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R1, tboolean
+ mov         dword ptr [r14+028h],1
+  STORE_INT R1, %3
+ mov         dword ptr [r14+018h],eax
+  JUMP exit(0)
+ jmp         .L12
+; interrupt handlers
+.L13:
+ mov         eax,1
+ lea         rbx,.L14
+ jmp         .L5
+; exit handlers
+.L12:
+ mov         edx,0
+ jmp         .L1
+.L18:
+ ud2
+
+)"
+                     : R"(
 bb_exit_1:
 .L15:
   ; %2 can be restored from R3
@@ -843,7 +1270,72 @@ TEST_CASE_FIXTURE(IrAssemblyFixture, "LazyHintNotMaterializedInsideScopedSpills"
     // Both CHECK_GC and INTERRUPT should have a lazy evict of xmm0 into R4
     CHECK_EQ(
         "\n" + lower(),
-        R"(
+        kWideTValue ? R"(
+; align 32 using ud2
+bb_0:
+.L11:
+  %0 = LOAD_DOUBLE R1
+ vmovsd      xmm0,qword ptr [r14+018h]
+  ; %0 can be restored from R1
+  %1 = NUM_TO_INT %0
+ vcvttsd2si  eax,xmm0
+  ; %1 can be restored from R1 as int
+  %2 = ADD_NUM %0, %0
+ vaddsd      xmm0,xmm0,xmm0
+  STORE_DOUBLE R1, %2
+  ; %0 can no longer be restored from R1
+  ; %1 can no longer be restored from R1 as int
+ vmovsd      qword ptr [r14+018h],xmm0
+  STORE_TAG R1, tnumber
+ mov         dword ptr [r14+028h],3
+  %5 = INT_TO_NUM %1
+ vcvtsi2sd   xmm0,xmm0,eax
+  ; %5 has a lazy restore location R4
+  CHECK_GC
+ mov         rax,qword ptr [r15+<offset>]
+ mov         rdx,qword ptr [rax+<offset>]
+ cmp         rdx,qword ptr [rax+<offset>]
+ jb          .L12
+ mov         rcx,r15
+ mov         edx,1
+ vmovsd      qword ptr [r14+060h],xmm0
+ mov         dword ptr [r14+070h],0
+  ; evict %5 (double xmm0) into R4 [lazy]
+ call        qword ptr [r13+<offset>]
+ mov         r14,qword ptr [r15+<offset>]
+ vmovsd      xmm0,qword ptr [r14+060h]
+  ; restore %5 (double xmm0) from R4
+.L12:
+  INTERRUPT 0u
+ vmovsd      qword ptr [r14+060h],xmm0
+ mov         dword ptr [r14+070h],0
+  ; evict %5 (double xmm0) into R4 [lazy]
+ mov         rax,qword ptr [r15+<offset>]
+ cmp         qword ptr [rax+<offset>],0
+ jne         .L13
+.L14:
+  STORE_DOUBLE R2, %5
+ vmovsd      xmm0,qword ptr [r14+060h]
+  ; restore %5 (double xmm0) from R4
+ vmovsd      qword ptr [r14+030h],xmm0
+  STORE_TAG R2, tnumber
+ mov         dword ptr [r14+040h],3
+  RETURN R1, 2i
+ lea         rdi,[r14-018h]
+ vmovups     xmm0,xmmword ptr [r14+018h]
+ vmovups     xmmword ptr [rdi],xmm0
+ mov         r8d,dword ptr [r14+028h]
+ mov         dword ptr [rdi+010h],r8d
+ vmovups     xmm0,xmmword ptr [r14+030h]
+ vmovups     xmmword ptr [rdi+018h],xmm0
+ mov         r8d,dword ptr [r14+040h]
+ mov         dword ptr [rdi+028h],r8d
+ add         rdi,30h
+ mov         ecx,2
+ jmp         .L7
+
+)"
+                     : R"(
 ; align 32 using ud2
 bb_0:
 .L11:
@@ -905,6 +1397,172 @@ bb_0:
 
 )"
     );
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "ClassConstructionAtHighVmSlot")
+{
+    options.target = AssemblyOptions::A64;
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    build.inst(IrCmd::CONSTRUCT, build.vmReg(254), build.vmReg(253), build.constUint(0));
+    build.inst(IrCmd::RETURN, build.vmReg(254), build.constInt(1));
+    updateUseCounts(build.function);
+
+    LoweringStats stats;
+    std::string assembly = getAssemblyFromIr(build, options, &stats);
+    INFO(assembly);
+    CHECK_EQ(stats.loweringErrors, 0);
+    CHECK_EQ(stats.regAllocErrors, 0);
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "DseHintMaterializesTValueClearsTagOnWideLayout")
+{
+    if constexpr (!kWideTValue)
+        return;
+
+    auto runTarget = [&](AssemblyOptions::Target target)
+    {
+        IrBuilder b(hooks, {});
+        b.beginBlock(b.block(IrBlockKind::Internal));
+        IrOp a = b.inst(IrCmd::LOAD_TVALUE, b.vmReg(0));
+        IrOp v0 = b.inst(IrCmd::ADD_VEC, a, a);
+        // Dead STORE_TVALUE to R4 (not live at RETURN) becomes a lazy TValue restore hint for v0.
+        // Use a non-GCO tag (tnumber) so DSE turns the store into a hint even under LUA_VECTOR_DOUBLE=1.
+        b.inst(IrCmd::STORE_TVALUE, b.vmReg(4), v0, IrOp{}, b.constTag(tnumber));
+        b.inst(IrCmd::INTERRUPT, b.constUint(0));
+        b.inst(IrCmd::STORE_TVALUE, b.vmReg(2), v0, IrOp{}, b.constTag(tnumber));
+        b.inst(IrCmd::RETURN, b.vmReg(2), b.constInt(1));
+
+        updateUseCounts(b.function);
+
+        AssemblyOptions opts = options;
+        opts.target = target;
+        LoweringStats stats;
+        std::string assembly = getAssemblyFromIr(b, opts, &stats);
+        INFO(assembly);
+        CHECK_EQ(stats.loweringErrors, 0);
+        CHECK_EQ(stats.regAllocErrors, 0);
+        return assembly;
+    };
+
+    // Materializing a lazy 16-byte TValue payload into R4 (0x60) on 24-byte slots must zero 'tt' (0x70) so GC cannot observe a stale tag.
+    std::string x64 = runTarget(AssemblyOptions::X64_SystemV);
+    INFO(x64);
+    CHECK(x64.find("vmovups     xmmword ptr [r14+060h],xmm0") != std::string::npos);
+    CHECK(x64.find("mov         dword ptr [r14+070h],0") != std::string::npos);
+
+    std::string a64 = runTarget(AssemblyOptions::A64);
+    INFO(a64);
+    CHECK(a64.find(",[x25,#96]") != std::string::npos);
+    CHECK(a64.find("str         wzr,[x25,#112]") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "HighVmRegBuiltinsA64")
+{
+    options.target = AssemblyOptions::A64;
+
+    build.beginBlock(build.block(IrBlockKind::Internal));
+    // Slot 175 has tt at 175*24+16 = 4216 (> 4092 = 1023*4), exercising materialized base addressing.
+    build.inst(IrCmd::FASTCALL, build.constUint(LBF_MATH_FREXP), build.vmReg(175), build.vmReg(174), build.constInt(2));
+    build.inst(IrCmd::FASTCALL, build.constUint(LBF_MATH_MODF), build.vmReg(175), build.vmReg(174), build.constInt(2));
+    build.inst(IrCmd::RETURN, build.vmReg(175), build.constInt(1));
+    updateUseCounts(build.function);
+
+    LoweringStats stats;
+    std::string assembly = getAssemblyFromIr(build, options, &stats);
+    INFO(assembly);
+    CHECK_EQ(stats.loweringErrors, 0);
+    CHECK_EQ(stats.regAllocErrors, 0);
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "StoreVectorPackedWide")
+{
+    if constexpr (!kWideTValue)
+        return;
+
+    auto compile = [&](AssemblyOptions::Target target)
+    {
+        IrBuilder b(hooks, {});
+        b.beginBlock(b.block(IrBlockKind::Internal));
+        IrOp x = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(0));
+        IrOp y = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(4));
+        IrOp z = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(8));
+        IrOp w = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(12));
+        b.inst(IrCmd::STORE_VECTOR, b.vmReg(1), x, y, z, b.constTag(tvector), w);
+        b.inst(IrCmd::RETURN, b.vmReg(1), b.constInt(1));
+        updateUseCounts(b.function);
+
+        AssemblyOptions opts = options;
+        opts.target = target;
+        LoweringStats stats;
+        std::string assembly = getAssemblyFromIr(b, opts, &stats);
+        INFO(assembly);
+        CHECK_EQ(stats.loweringErrors, 0);
+        CHECK_EQ(stats.regAllocErrors, 0);
+        return assembly;
+    };
+
+    std::string x64 = compile(AssemblyOptions::X64_SystemV);
+    CHECK(x64.find("vmovups     xmmword ptr [r14+018h]") != std::string::npos);
+
+    std::string a64 = compile(AssemblyOptions::A64);
+    INFO(a64);
+    CHECK(a64.find("zip1") != std::string::npos);
+    CHECK(a64.find("str         q") != std::string::npos);
+    CHECK(a64.find("[x25,#24]") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(IrAssemblyFixture, "BuildVecLoweringWide")
+{
+    if constexpr (!kWideTValue)
+        return;
+
+    auto compile = [&](AssemblyOptions::Target target, bool zeroHi, bool limitRegs)
+    {
+        ScopedFastFlag sff{FFlag::DebugCodegenLimitRegs, limitRegs};
+
+        IrBuilder b(hooks, {});
+        b.beginBlock(b.block(IrBlockKind::Internal));
+        IrOp x = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(0));
+        IrOp y = b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(4));
+        IrOp z = zeroHi ? b.constDouble(0.0) : b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(8));
+        IrOp w = zeroHi ? b.constDouble(0.0) : b.inst(IrCmd::LOAD_FLOAT, b.vmReg(0), b.constInt(12));
+        IrOp v = b.inst(IrCmd::BUILD_VEC, x, y, z, w);
+        // Keep all 4 float inputs live past BUILD_VEC to stress register allocation under LimitRegs.
+        if (!zeroHi)
+        {
+            IrOp s = b.inst(IrCmd::ADD_FLOAT, b.inst(IrCmd::ADD_FLOAT, x, y), b.inst(IrCmd::ADD_FLOAT, z, w));
+            b.inst(IrCmd::STORE_DOUBLE, b.vmReg(2), b.inst(IrCmd::FLOAT_TO_NUM, s));
+            b.inst(IrCmd::STORE_TAG, b.vmReg(2), b.constTag(tnumber));
+        }
+        b.inst(IrCmd::STORE_TVALUE, b.vmReg(1), v, IrOp{}, b.constTag(tvector));
+        b.inst(IrCmd::RETURN, b.vmReg(1), b.constInt(zeroHi ? 1 : 2));
+        updateUseCounts(b.function);
+
+        AssemblyOptions opts = options;
+        opts.target = target;
+        LoweringStats stats;
+        std::string assembly = getAssemblyFromIr(b, opts, &stats);
+        INFO(assembly);
+        CHECK_EQ(stats.loweringErrors, 0);
+        CHECK_EQ(stats.regAllocErrors, 0);
+        return assembly;
+    };
+
+    std::string x64Full = compile(AssemblyOptions::X64_SystemV, false, false);
+    CHECK(x64Full.find("vinsertps") != std::string::npos);
+    CHECK(x64Full.find("vpshufps") != std::string::npos);
+
+    std::string a64Full = compile(AssemblyOptions::A64, false, false);
+    CHECK(a64Full.find("zip1") != std::string::npos);
+
+    std::string a64ZeroHi = compile(AssemblyOptions::A64, true, false);
+    CHECK(a64ZeroHi.find("fmov        d") != std::string::npos);
+    CHECK(a64ZeroHi.find("zip1") != std::string::npos);
+
+    // Verify 4 live float operands + BUILD_VEC under DebugCodegenLimitRegs=true on both backends.
+    compile(AssemblyOptions::X64_SystemV, false, true);
+    compile(AssemblyOptions::A64, false, true);
 }
 
 TEST_SUITE_END();

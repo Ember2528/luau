@@ -505,6 +505,8 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPInsertExtract")
     SINGLE_COMPARE(dup_4s(q29, q30, 0), 0x4E0407DD);
     SINGLE_COMPARE(umov_4s(w1, q30, 3), 0x0E1C3FC1);
     SINGLE_COMPARE(umov_4s(w13, q1, 1), 0x0E0C3C2D);
+    SINGLE_COMPARE(zip1_4s(q1, q2, q3), 0x4E833841);
+    SINGLE_COMPARE(zip1_2d(q1, q2, q3), 0x4EC33841);
 
     SINGLE_COMPARE(bit(q1, q2, q3), 0x6EA31C41);
     SINGLE_COMPARE(bif(q1, q2, q3), 0x6EE31C41);

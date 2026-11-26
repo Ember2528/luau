@@ -138,6 +138,38 @@ TEST_CASE_FIXTURE(IrCallWrapperX64Fixture, "SimpleStackArgs")
 )");
 }
 
+TEST_CASE_FIXTURE(IrCallWrapperX64Fixture, "FloatingPointStackArgs")
+{
+    ScopedRegX64 fp1{regs, regs.takeReg(xmm1, kInvalidInstIdx)};
+    ScopedRegX64 fp2{regs, regs.takeReg(xmm2, kInvalidInstIdx)};
+    ScopedRegX64 fp3{regs, regs.takeReg(xmm3, kInvalidInstIdx)};
+    callWrap.addArgument(SizeX64::qword, 0);
+    callWrap.addArgument(SizeX64::xmmword, fp2);
+    callWrap.addArgument(SizeX64::xmmword, fp1.reg);
+    callWrap.addArgument(SizeX64::xmmword, fp3);
+    callWrap.addArgument(SizeX64::xmmword, fp1); // shared source must survive the stack store and register shuffle
+    SUBCASE("ScalarMemory")
+    {
+        callWrap.addArgument(SizeX64::xmmword, qword[r14 + 8]);
+    }
+    SUBCASE("VectorMemory")
+    {
+        callWrap.addArgument(SizeX64::xmmword, xmmword[r14 + 8]);
+    }
+    callWrap.call(qword[r12]);
+
+    checkMatch(R"(
+ vmovsd      qword ptr [rsp+020h],xmm1
+ mov         rax,qword ptr [r14+8]
+ mov         qword ptr [rsp+028h],rax
+ vmovsd      xmm0,xmm2,xmm2
+ vmovsd      xmm2,xmm1,xmm1
+ vmovsd      xmm1,xmm0,xmm0
+ mov         rcx,0
+ call        qword ptr [r12]
+)");
+}
+
 TEST_CASE_FIXTURE(IrCallWrapperX64Fixture, "FixedRegisters")
 {
     callWrap.addArgument(SizeX64::dword, 1);
